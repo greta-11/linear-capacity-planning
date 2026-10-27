@@ -1,0 +1,4 @@
+email,start_date,end_date,type,fraction,note
+person@example.com,2026-12-21,2026-12-24,vacation,1,Winter break
+person@example.com,2027-01-08,2027-01-08,appointment,0.5,Half day
+*,2026-12-25,2026-12-25,holiday,1,Company holiday (everyone)

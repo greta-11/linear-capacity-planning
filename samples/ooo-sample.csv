@@ -1,0 +1,10 @@
+email,start_date,end_date,type,fraction,note
+ana@acme.dev,2026-11-02,2026-11-10,vacation,1,Family trip
+*,2026-11-26,2026-11-27,holiday,1,Company holiday
+hana@acme.dev,2026-11-10,2026-11-10,sick,1,
+hana@acme.dev,2026-11-10,2026-11-11,sick,1,duplicate from HR export
+ivan@acme.dev,2026-11-16,2026-11-20,training,0.5,Mornings only
+kai@acme.dev,2026-11-23,2026-12-04,parental leave,1,
+jo@acme.dev,2026-12-10,2026-12-11,vacation,1,
+chen@acme.dev,2026-12-21,2026-12-25,conference,1,KubeCon
+contractor@acme.dev,2026-11-02,2026-11-06,vacation,1,Not a Linear user
