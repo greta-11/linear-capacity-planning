@@ -27,9 +27,11 @@ try {
         `${team.cyclesEnabled ? '' : '  (cycles disabled — no scheduled load)'}${team.estimationType === 'notUsed' ? '  (no estimates — counting issues)' : unestimated ? `  (${unestimated} unestimated)` : ''}`,
     );
   }
+  const dated = snap.projects.filter((p) => p.targetDate).length;
+  console.log(`\n${snap.projects.length} open projects (${dated} with a target date) · ${snap.issues.filter((i) => !i.cycleId).length} open project issues without a cycle`);
   const noEmail = snap.people.filter((p) => !p.email).length;
-  console.log(`\n${snap.people.length} people${noEmail ? `, ${noEmail} without a visible email (OOO rows can't match them)` : ''}.`);
-  console.log('✓ Queries work. Run `npm run dev` and click "Sync from Linear" to load this into the planner.');
+  console.log(`${snap.people.length} people${noEmail ? `, ${noEmail} without a visible email (OOO rows can't match them)` : ''}.`);
+  console.log('✓ Queries work. Run `npm run dev` and click Sync on the Linear card to load this into the planner.');
 } catch (err) {
   console.error(`✗ ${err instanceof LinearError ? err.message : (err as Error).stack}`);
   process.exit(1);

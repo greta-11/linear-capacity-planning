@@ -1,5 +1,5 @@
 import { emptyPlanner } from '../shared/capacity';
-import type { Cycle, Issue, OooDataset, OooEntry, PlannerState, Snapshot } from '../shared/types';
+import type { Cycle, Issue, OooDataset, OooEntry, PlannerState, Project, Snapshot } from '../shared/types';
 
 // Small hand-built workspace. Today is Monday 2026-11-02, the first day of T's
 // active cycle c3. A is on team T; B is on T and U.
@@ -29,6 +29,7 @@ export function issue(partial: Partial<Issue> & Pick<Issue, 'teamId' | 'cycleId'
     priority: 3,
     stateType: 'unstarted',
     stateName: 'Todo',
+    projectId: null,
     projectName: null,
     labels: [],
     createdAt: '2026-09-01T00:00:00.000Z',
@@ -40,7 +41,7 @@ export function issue(partial: Partial<Issue> & Pick<Issue, 'teamId' | 'cycleId'
   };
 }
 
-export function fixture(extraIssues: Issue[] = []): Snapshot {
+export function fixture(extraIssues: Issue[] = [], projects: Project[] = []): Snapshot {
   const done = (cycleId: string, assigneeId: string, estimate: number, teamId = 'T') =>
     issue({ teamId, cycleId, assigneeId, estimate, stateType: 'completed', completedAt: '2026-10-10T00:00:00.000Z' });
   return {
@@ -64,6 +65,7 @@ export function fixture(extraIssues: Issue[] = []): Snapshot {
       cycle('u3', 'U', 3, '2026-11-02', '2026-11-15', false),
     ],
     issues: [done('c1', 'A', 5), done('c1', 'A', 5), done('c2', 'A', 5), done('c2', 'A', 5), ...extraIssues],
+    projects,
   };
 }
 

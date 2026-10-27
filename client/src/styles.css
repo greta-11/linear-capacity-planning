@@ -15,6 +15,7 @@
   --series-2: #eb6834; /* shared */
   --series-3: #1baf7a; /* unplanned */
   --series-4: #eda100; /* unassigned */
+  --series-5: #e87ba4; /* unscheduled project work */
   --neutral-mark: #b9b8b1; /* available capacity */
 
   --good: #0ca30c;
@@ -53,6 +54,7 @@
     --series-2: #d95926;
     --series-3: #199e70;
     --series-4: #c98500;
+    --series-5: #d55181;
     --neutral-mark: #5a5955;
     --good-ink: #4cc94c;
     --warning-ink: #fab219;
@@ -1384,4 +1386,418 @@ ul.plain li {
   .facts dt {
     margin-top: 4px;
   }
+}
+
+/* ---------- v2: data strip ---------- */
+.strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+.sources {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.source {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px 6px 10px;
+  background: var(--bg);
+  min-width: 0;
+}
+.source-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex: none;
+}
+.source-linear {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.source-workday {
+  background: var(--warning);
+  color: #0b0b0b;
+}
+.source-body {
+  min-width: 0;
+}
+.source-name {
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.source-meta {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 340px;
+}
+.settings-btn {
+  align-self: center;
+}
+@media (max-width: 900px) {
+  .strip {
+    padding: 10px 16px;
+  }
+  .source {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .source-body {
+    flex: 1 1 160px;
+  }
+  .source-meta {
+    white-space: normal;
+    max-width: none;
+  }
+}
+
+/* ---------- v2: filters, toolbar, multi-select ---------- */
+.filters-inline {
+  padding: 0;
+  align-items: flex-end;
+}
+.toolbar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.field-group {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.field-group legend {
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 0;
+  margin-bottom: 4px;
+}
+.field-group select,
+.field-group input,
+.input-narrow {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.input-narrow {
+  width: 64px;
+}
+.link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.multiselect {
+  position: relative;
+}
+.ms-button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 5px 8px;
+  min-width: 120px;
+  max-width: 200px;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  cursor: pointer;
+}
+.ms-active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ms-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ms-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  width: 260px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 6px;
+  color: var(--text);
+}
+.ms-search {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.ms-list {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.ms-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ms-option:hover {
+  background: var(--surface-2);
+}
+.ms-hint {
+  margin-left: auto;
+}
+.ms-empty {
+  padding: 6px;
+}
+
+/* ---------- v2: overlays ---------- */
+.overlay-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.overlay-head h2 {
+  margin: 0;
+}
+.modal {
+  max-height: 84vh;
+  overflow-y: auto;
+}
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+}
+.drawer {
+  width: min(720px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.2);
+  padding: 20px;
+}
+.drawer-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+.drawer-body section h4:first-child {
+  margin-top: 0;
+}
+
+/* ---------- v2: project risk ---------- */
+.risk-score {
+  display: grid;
+  grid-template-columns: 76px 80px 28px;
+  align-items: center;
+  gap: 8px;
+}
+.risk-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.risk-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+.risk-fill-high {
+  background: var(--critical);
+}
+.risk-fill-medium {
+  background: var(--warning);
+}
+.risk-fill-low {
+  background: var(--good);
+}
+.risk-number {
+  font-weight: 600;
+}
+.pill-risk-high {
+  background: var(--critical-tint);
+}
+.pill-risk-high .pill-icon {
+  color: var(--critical-ink);
+}
+.pill-risk-medium {
+  background: var(--warning-tint);
+}
+.pill-risk-medium .pill-icon {
+  color: var(--warning-ink);
+}
+.pill-risk-low {
+  background: var(--good-tint);
+}
+.pill-risk-low .pill-icon {
+  color: var(--good-ink);
+}
+.health {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+.health-onTrack::before {
+  content: '● ';
+  color: var(--good);
+}
+.health-atRisk::before {
+  content: '● ';
+  color: var(--warning);
+}
+.health-offTrack::before {
+  content: '● ';
+  color: var(--critical);
+}
+.risk-detail .grid-2 {
+  margin-top: 8px;
+}
+.truncate-sm {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- v2: heat map ---------- */
+.swatch-unscheduled {
+  background: var(--series-5);
+}
+.heatmap-v2 {
+  width: 100%;
+}
+.heatmap-v2 thead th {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  vertical-align: bottom;
+  padding: 4px 6px;
+}
+.hm-name {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  min-width: 170px;
+  text-align: left;
+  font-weight: 500;
+  padding: 4px 8px 4px 2px;
+}
+.hm-person {
+  padding-left: 14px;
+  font-weight: 400;
+  color: var(--text);
+}
+.hm-person .chip {
+  margin-left: 6px;
+}
+.hm-team-row th {
+  padding-top: 14px;
+}
+.hm-team-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.heatmap-v2 .cell {
+  height: 34px;
+  min-width: 72px;
+}
+.cell-click {
+  cursor: pointer;
+}
+.cell-team {
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--border-strong);
+}
+.cell-project {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.cell-key.cell-project {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.hm-legend {
+  margin-top: 8px;
+}
+@media (max-width: 600px) {
+  .hm-name {
+    min-width: 120px;
+  }
+  .risk-score {
+    grid-template-columns: 70px 50px 24px;
+  }
+}
+
+.main {
+  padding-top: 16px;
+}
+.risk-detail .table td.num,
+.risk-detail .table th.num {
+  white-space: nowrap;
+}
+.issue-link {
+  white-space: nowrap;
+}
+.drawer .table {
+  font-size: 12px;
+}
+.drawer .truncate {
+  max-width: 220px;
+}
+.nowrap {
+  white-space: nowrap;
 }

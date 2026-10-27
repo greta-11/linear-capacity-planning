@@ -2,11 +2,11 @@ import { useMemo, useState } from 'react';
 import { DESTINATION_HELP, DESTINATION_LABEL } from '../../../shared/changes';
 import type { Change, Destination, LedgerEntry, Recommendation } from '../../../shared/types';
 import { useAccept, useApply, useCsvStatus, useDiscard, useDismiss, useRevert } from '../api';
-import { useVisibleRecommendations } from '../App';
 import { ChangeLine, EvidencePanel } from '../components/Evidence';
 import { Empty } from '../components/ui';
 import { usePlanner } from '../context';
-import { dateTime } from '../format';
+import { dateTime, formatRange } from '../format';
+import { PRESETS } from '../ranges';
 
 const DESTINATIONS: Destination[] = ['linear', 'planner', 'csv'];
 const ACCEPT_LABEL: Record<Destination, string> = { linear: 'Queue for Linear', planner: 'Apply in planner', csv: 'Add OOO to-do' };
@@ -15,8 +15,71 @@ const OPTION_LABEL: Record<string, string> = {
   reassign: 'Reassign',
 };
 
+/** Recommendations scoped to the Recommendations tab's team filter. */
+export function useVisibleRecommendations<T extends { teamId?: string; personId?: string }>(recs: T[]): T[] {
+  const { filters, model } = usePlanner();
+  const teamId = filters.recs.teamId;
+  return useMemo(
+    () =>
+      recs.filter((r) => {
+        if (!teamId) return true;
+        if (r.teamId) return r.teamId === teamId;
+        if (r.personId) return model.people.get(r.personId)?.teamIds.includes(teamId) ?? false;
+        return true;
+      }),
+    [recs, teamId, model],
+  );
+}
+
+function RecFilters() {
+  const { filters, setFilters, state, model } = usePlanner();
+  const r = filters.recs;
+  const set = (patch: Partial<typeof r>) => setFilters({ recs: { ...r, ...patch } });
+  return (
+    <div className="filters filters-inline">
+      <label className="field">
+        <span>Cycles in</span>
+        <select value={r.preset} onChange={(e) => set({ preset: e.target.value })} data-testid="range-preset">
+          {PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {r.preset === 'custom' ? (
+        <>
+          <label className="field">
+            <span>From</span>
+            <input type="date" value={r.from} onChange={(e) => e.target.value && set({ from: e.target.value })} />
+          </label>
+          <label className="field">
+            <span>To</span>
+            <input type="date" value={r.to} min={r.from} onChange={(e) => e.target.value && set({ to: e.target.value })} />
+          </label>
+        </>
+      ) : (
+        <span className="range-label" data-testid="range-label">
+          {formatRange(model.from, model.to)}
+        </span>
+      )}
+      <label className="field">
+        <span>Team</span>
+        <select value={r.teamId ?? ''} onChange={(e) => set({ teamId: e.target.value || null })} data-testid="team-filter">
+          <option value="">All teams</option>
+          {state.snapshot!.teams.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 export function Adjustments() {
-  const { recommendations, state, setFilters } = usePlanner();
+  const { recommendations, state, setFilters, filters } = usePlanner();
   const visible = useVisibleRecommendations(recommendations);
   const [dest, setDest] = useState<Destination | 'all'>('all');
   const dismiss = useDismiss();
@@ -35,6 +98,7 @@ export function Adjustments() {
 
   return (
     <div className="stack">
+      <RecFilters />
       <p className="lede">
         Recommendations come from the same numbers as the capacity views, and each one shows its evidence. When you accept one, it goes to one of three places, depending on who owns that information:
       </p>
@@ -63,7 +127,7 @@ export function Adjustments() {
           ) : (
             <Empty>
               Nothing to recommend for this team and date range.{' '}
-              <button className="link-button" onClick={() => setFilters({ preset: 'next-12-weeks' })}>
+              <button className="link-button" onClick={() => setFilters({ recs: { ...filters.recs, preset: 'next-12-weeks' } })}>
                 Widen the range
               </button>
             </Empty>

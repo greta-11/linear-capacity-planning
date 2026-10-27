@@ -90,6 +90,50 @@ export function weekBuckets(from: Day, to: Day): Bucket[] {
   return out;
 }
 
+export type PeriodUnit = 'week' | 'month' | 'quarter';
+
+/** First day of the month `months` after the month containing `day`. */
+export function addMonths(day: Day, months: number): Day {
+  const y = Number(day.slice(0, 4));
+  const m = Number(day.slice(5, 7)) - 1 + months;
+  const yy = y + Math.floor(m / 12);
+  const mm = ((m % 12) + 12) % 12;
+  return `${yy}-${String(mm + 1).padStart(2, '0')}-01`;
+}
+
+function periodLabel(unit: PeriodUnit, size: number, start: Day, end: Day): string {
+  const year = (d: Day) => d.slice(0, 4);
+  const month = (d: Day) => MONTHS[Number(d.slice(5, 7)) - 1];
+  if (unit === 'week') return formatRange(start, end);
+  if (unit === 'month') {
+    if (size === 1) return `${month(start)} ${year(start)}`;
+    return year(start) === year(end) ? `${month(start)} – ${month(end)} ${year(end)}` : `${month(start)} ${year(start)} – ${month(end)} ${year(end)}`;
+  }
+  const q = (d: Day) => `Q${Math.floor((Number(d.slice(5, 7)) - 1) / 3) + 1}`;
+  return size === 1 ? `${q(start)} ${year(start)}` : `${q(start)} ${year(start)} – ${q(end)} ${year(end)}`;
+}
+
+/**
+ * `count` consecutive periods of `size` weeks, months or quarters, starting with the
+ * period that contains `today`. Weeks align to Monday, months to the 1st, quarters to
+ * Jan/Apr/Jul/Oct. The first period is clipped to start today; labels describe the full period.
+ */
+export function periodBuckets(today: Day, unit: PeriodUnit, size: number, count: number): Bucket[] {
+  const n = Math.max(1, Math.floor(size));
+  const out: Bucket[] = [];
+  let periodStart: Day;
+  if (unit === 'week') periodStart = weekStart(today);
+  else if (unit === 'month') periodStart = `${today.slice(0, 7)}-01`;
+  else periodStart = addMonths(`${today.slice(0, 4)}-01-01`, Math.floor((Number(today.slice(5, 7)) - 1) / 3) * 3);
+  for (let i = 0; i < Math.max(1, count); i++) {
+    const next = unit === 'week' ? addDays(periodStart, 7 * n) : addMonths(periodStart, unit === 'month' ? n : 3 * n);
+    const end = addDays(next, -1);
+    out.push({ id: periodStart, label: periodLabel(unit, n, periodStart, end), start: i === 0 ? maxDay(periodStart, today) : periodStart, end });
+    periodStart = next;
+  }
+  return out;
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function formatShort(day: Day): string {

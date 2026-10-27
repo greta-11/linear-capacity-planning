@@ -27,6 +27,7 @@ app.get(
       ooo: currentOoo(snapshot),
       planner: store.planner(),
       syncHistory: store.syncHistory(),
+      workdaySyncedAt: store.workdaySyncedAt(),
       dataDir: DATA_DIR,
     });
   }),
@@ -37,6 +38,17 @@ app.post(
   wrap(async (_req, res) => {
     const result = await pull();
     res.status(result.ok ? 200 : 502).json({ ok: result.ok, record: result.record });
+  }),
+);
+
+// Workday: OOO arrives as a CSV export, so "sync" re-reads and re-validates the imported file.
+app.post(
+  '/api/workday/sync',
+  wrap(async (_req, res) => {
+    const ooo = currentOoo(await ensureSnapshot());
+    const at = new Date().toISOString();
+    store.saveWorkdaySync(at);
+    res.json({ at, fileName: ooo?.fileName ?? null, entries: ooo?.entries.length ?? 0, problems: ooo?.problems.length ?? 0 });
   }),
 );
 

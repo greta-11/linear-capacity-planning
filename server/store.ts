@@ -54,6 +54,9 @@ export const store = {
   },
   savePlanner: (p: PlannerState) => writeJson('planner.json', p),
 
+  workdaySyncedAt: () => readJson<{ at: string }>('workday.json')?.at ?? null,
+  saveWorkdaySync: (at: string) => writeJson('workday.json', { at }),
+
   syncHistory: () => readJson<SyncRecord[]>('sync-history.json') ?? [],
   addSync(record: SyncRecord) {
     writeJson('sync-history.json', [record, ...this.syncHistory()].slice(0, 20));

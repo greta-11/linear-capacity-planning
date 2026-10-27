@@ -4,7 +4,7 @@ import { readJson, writeJson } from '../store';
 import { demoSnapshot } from './seed';
 
 // Stand-in for the Linear workspace in demo mode. It lives in data/demo-workspace.json
-// so "Apply to Linear" writes survive restarts and "Sync from Linear" reads them back.
+// so "Apply to Linear" writes survive restarts and a Linear sync reads them back.
 
 const FILE = 'demo-workspace.json';
 
@@ -15,7 +15,7 @@ export function loadDemoWorkspace(): Snapshot {
   } catch (err) {
     throw new Error(`Could not read the demo workspace (data/${FILE}): ${(err as Error).message}`);
   }
-  if (!ws) {
+  if (!ws || !Array.isArray(ws.projects)) {
     ws = demoSnapshot(localToday());
     writeJson(FILE, ws);
   }

@@ -1,5 +1,5 @@
 import { addDays, countWorkingDays, maxDay, weekStart } from '../../shared/calendar';
-import type { Cycle, Day, Issue, Person, Snapshot, StateType, Team } from '../../shared/types';
+import type { Cycle, Day, Issue, Person, Project, Snapshot, StateType, Team } from '../../shared/types';
 
 // Deterministic demo workspace, generated relative to `today` so there is always
 // an active cycle. It is built to show each kind of overcommitment:
@@ -9,6 +9,8 @@ import type { Cycle, Day, Issue, Person, Snapshot, StateType, Team } from '../..
 //  - Gus (Web) just joined, no history → velocity
 //  - Web's next cycle has unestimated issues → estimate
 //  - Mobile pulls in ~30% unplanned work every cycle → unplanned buffer
+//  - Projects: API v2 (Platform, due in ~3 weeks while Ana is out) is the one at risk;
+//    Observability has no target date; the rest are comfortable
 
 const WORK_DAYS = [1, 2, 3, 4, 5];
 
@@ -55,6 +57,30 @@ const PEOPLE: DemoPerson[] = [
   { id: 'u-jo', name: 'Jo Mensah', email: 'jo@acme.dev', teams: ['team-mob'], velocity: 0.9, history: { 'team-mob': 1 }, plan: { 'team-mob': [0.75, 0.7, 0.7, 0.65, 0.6, 0.6, 0.5, 0.5, 0.4, 0.4, 0.3, 0.3] } },
   { id: 'u-kai', name: 'Kai Brennan', email: 'kai@acme.dev', teams: ['team-mob'], velocity: 1.0, history: { 'team-mob': 1 }, plan: { 'team-mob': [0.7, 0.75, 0.7, 0.7, 0.9, 0.9, 0.6, 0.5, 0.5, 0.4, 0.4, 0.3] } },
 ];
+
+const PROJECTS: { id: string; name: string; teams: string[]; targetWeeks: number | null; lead: string; progress: number; health: Project['health'] }[] = [
+  { id: 'prj-api', name: 'API v2 launch', teams: ['team-plt'], targetWeeks: 3, lead: 'u-ana', progress: 0.45, health: 'onTrack' },
+  { id: 'prj-billing', name: 'Billing revamp', teams: ['team-plt', 'team-web'], targetWeeks: 6, lead: 'u-dana', progress: 0.3, health: 'atRisk' },
+  { id: 'prj-offline', name: 'Offline mode', teams: ['team-mob'], targetWeeks: 8, lead: 'u-hana', progress: 0.5, health: 'onTrack' },
+  { id: 'prj-ds', name: 'Design system refresh', teams: ['team-web'], targetWeeks: 10, lead: 'u-farah', progress: 0.2, health: 'onTrack' },
+  { id: 'prj-ipad', name: 'iPad support', teams: ['team-mob'], targetWeeks: 12, lead: 'u-jo', progress: 0.1, health: null },
+  { id: 'prj-obs', name: 'Observability', teams: ['team-plt'], targetWeeks: null, lead: 'u-ben', progress: 0.6, health: null },
+];
+
+/** Projects each person's scheduled work rotates through, per team. */
+const PERSON_PROJECTS: Record<string, Record<string, string[]>> = {
+  'u-ana': { 'team-plt': ['prj-api', 'prj-api', 'prj-obs'] },
+  'u-ben': { 'team-plt': ['prj-obs', 'prj-billing'] },
+  'u-chen': { 'team-plt': ['prj-api', 'prj-obs'] },
+  'u-dana': { 'team-plt': ['prj-billing'], 'team-web': ['prj-billing', 'prj-ds'] },
+  'u-eli': { 'team-web': ['prj-billing', 'prj-ds'] },
+  'u-farah': { 'team-web': ['prj-ds'] },
+  'u-gus': { 'team-web': ['prj-ds'] },
+  'u-hana': { 'team-mob': ['prj-offline'] },
+  'u-ivan': { 'team-mob': ['prj-offline', 'prj-ipad'] },
+  'u-jo': { 'team-mob': ['prj-ipad'] },
+  'u-kai': { 'team-mob': ['prj-offline', 'prj-ipad'] },
+};
 
 const TITLES: Record<string, string[]> = {
   'team-plt': ['Rate limiter for public API', 'Migrate jobs to new queue', 'Shard audit log table', 'Rotate service credentials', 'Retry policy for webhooks', 'Upgrade Postgres to 17', 'Trace sampling config', 'Cache warmup on deploy', 'Cleanup orphaned blobs', 'Tenant export pipeline', 'Feature flag service SDK', 'Reduce cold start time', 'Alert routing rules', 'Backfill billing events', 'Search index rebuild tool'],
@@ -106,16 +132,51 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
   const counters: Record<string, number> = {};
   const titleIdx: Record<string, number> = {};
 
-  const makeIssue = (teamId: string, cycle: Cycle, opts: { assigneeId: string | null; estimate: number | null; state: StateType; unplanned?: boolean; priority?: number; title?: string }) => {
+  const projects: Project[] = PROJECTS.map((p) => ({
+    id: p.id,
+    name: p.name,
+    url: `https://linear.app/acme/project/${p.id}`,
+    // Fridays, a whole number of weeks out.
+    targetDate: p.targetWeeks == null ? null : addDays(weekStart(today), 7 * p.targetWeeks + 4),
+    startDate: addDays(weekStart(today), -28),
+    statusType: 'started',
+    statusName: 'In Progress',
+    health: p.health,
+    progress: p.progress,
+    leadId: p.lead,
+    teamIds: p.teams,
+  }));
+  const projectById = new Map(projects.map((p) => [p.id, p]));
+  const rotation: Record<string, number> = {};
+  /** Next project for this person's work in a cycle, skipping projects due before the cycle ends. */
+  const projectFor = (personId: string, teamId: string, cycle: Cycle): string | null => {
+    const list = (PERSON_PROJECTS[personId]?.[teamId] ?? []).filter((id) => {
+      const target = projectById.get(id)!.targetDate;
+      return target == null || target >= cycle.endDate;
+    });
+    if (!list.length) return null;
+    const key = `${personId}:${teamId}`;
+    rotation[key] = (rotation[key] ?? -1) + 1;
+    return list[rotation[key] % list.length];
+  };
+
+  const makeIssue = (
+    teamId: string,
+    cycle: Cycle | null,
+    opts: { assigneeId: string | null; estimate: number | null; state: StateType; unplanned?: boolean; priority?: number; title?: string; projectId?: string | null },
+  ) => {
     const team = TEAMS.find((t) => t.id === teamId)!;
     counters[teamId] = (counters[teamId] ?? 100) + 1;
     const identifier = `${team.key}-${counters[teamId]}`;
     const titles = TITLES[teamId];
     titleIdx[teamId] = ((titleIdx[teamId] ?? -1) + 1) % titles.length;
-    const cycleLen = countWorkingDays(cycle.startDate, cycle.endDate, WORK_DAYS);
-    const addedDay = opts.unplanned ? addDays(cycle.startDate, 1 + Math.floor(rand() * Math.max(1, cycleLen - 2))) : addDays(cycle.startDate, -2);
+    // Backlog work with no cycle is anchored to "two weeks ago".
+    const anchor = cycle?.startDate ?? addDays(today, -14);
+    const cycleLen = cycle ? countWorkingDays(cycle.startDate, cycle.endDate, WORK_DAYS) : 10;
+    const addedDay = opts.unplanned ? addDays(anchor, 1 + Math.floor(rand() * Math.max(1, cycleLen - 2))) : addDays(anchor, -2);
     const created = `${addDays(addedDay, opts.unplanned ? 0 : -Math.floor(rand() * 20))}T10:00:00.000Z`;
-    const completedAt = opts.state === 'completed' ? `${addDays(cycle.startDate, Math.floor(rand() * team.weeks * 7))}T16:00:00.000Z` : null;
+    const completedAt = opts.state === 'completed' ? `${addDays(anchor, Math.floor(rand() * team.weeks * 7))}T16:00:00.000Z` : null;
+    const projectId = opts.projectId ?? null;
     const stateName: Record<StateType, string> = { triage: 'Triage', backlog: 'Backlog', unstarted: 'Todo', started: 'In Progress', completed: 'Done', canceled: 'Canceled' };
     issues.push({
       id: `iss-${identifier.toLowerCase()}`,
@@ -123,19 +184,20 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
       title: opts.title ?? (opts.unplanned ? pick(BUG_TITLES) : titles[titleIdx[teamId]]),
       url: `https://linear.app/acme/issue/${identifier}`,
       teamId,
-      cycleId: cycle.id,
+      cycleId: cycle?.id ?? null,
       assigneeId: opts.assigneeId,
       estimate: opts.estimate,
       priority: opts.priority ?? (opts.unplanned ? 2 : 1 + Math.floor(rand() * 4)),
       stateType: opts.state,
       stateName: stateName[opts.state],
-      projectName: opts.unplanned ? null : `${team.name} Q4`,
+      projectId,
+      projectName: projectId ? projectById.get(projectId)!.name : null,
       labels: opts.unplanned ? ['Bug'] : ['Feature'],
       createdAt: created,
       updatedAt: completedAt ?? `${addDays(today, -1)}T12:00:00.000Z`,
       completedAt,
       canceledAt: null,
-      addedToCycleAt: `${addedDay}T${opts.unplanned ? '14' : '09'}:00:00.000Z`,
+      addedToCycleAt: cycle ? `${addedDay}T${opts.unplanned ? '14' : '09'}:00:00.000Z` : null,
     });
   };
 
@@ -178,7 +240,7 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
         fill(target, (size) => {
           const state: StateType = isActive && first ? 'started' : 'unstarted';
           first = false;
-          makeIssue(team.id, cycle, { assigneeId: p.id, estimate: size, state });
+          makeIssue(team.id, cycle, { assigneeId: p.id, estimate: size, state, projectId: projectFor(p.id, team.id, cycle) });
         });
         if (isActive) {
           // Completed work earlier in the active cycle (doesn't count toward remaining load).
@@ -199,7 +261,7 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
           ['u-dana', 'SSO settings page'],
           [null, 'Rich link previews'],
         ] as const) {
-          makeIssue(team.id, cycle, { assigneeId, estimate: null, state: 'backlog', priority: 3, title });
+          makeIssue(team.id, cycle, { assigneeId, estimate: null, state: 'backlog', priority: 3, title, projectId: 'prj-billing' });
         }
       }
       if (team.id === 'team-plt' && upcomingIndex === 1) {
@@ -209,7 +271,33 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
     }
   }
 
-  return { source: 'demo', organizationName: 'Acme (demo)', urlKey: 'acme', fetchedAt, demoSeedDay: today, teams, people, cycles, issues };
+  // Project backlog with no cycle: counts as load spread to each project's target date.
+  const backlog: [string, string, string | null, number | null, string][] = [
+    ['team-plt', 'prj-api', 'u-ana', 5, 'API v2: pagination for list endpoints'],
+    ['team-plt', 'prj-api', 'u-ana', 3, 'API v2: deprecation headers'],
+    ['team-plt', 'prj-api', 'u-chen', 3, 'API v2: SDK codegen'],
+    ['team-plt', 'prj-api', 'u-chen', 2, 'API v2: changelog page'],
+    ['team-plt', 'prj-api', null, 3, 'API v2: public docs'],
+    ['team-plt', 'prj-billing', 'u-dana', 3, 'Billing: proration service'],
+    ['team-web', 'prj-billing', 'u-dana', 5, 'Billing: plan picker'],
+    ['team-web', 'prj-billing', 'u-eli', 3, 'Billing: invoice history'],
+    ['team-web', 'prj-billing', null, 2, 'Billing: tax ID field'],
+    ['team-mob', 'prj-offline', 'u-kai', 3, 'Offline: queue retries'],
+    ['team-mob', 'prj-offline', 'u-hana', 2, 'Offline: conflict banner'],
+    ['team-web', 'prj-ds', 'u-farah', 3, 'Design system: tokens v2'],
+    ['team-web', 'prj-ds', 'u-gus', null, 'Design system: icon set'],
+    ['team-mob', 'prj-ipad', 'u-jo', 2, 'iPad: keyboard shortcuts'],
+    ['team-plt', 'prj-obs', 'u-ben', 5, 'Observability: trace sampling'],
+    ['team-plt', 'prj-obs', 'u-chen', 3, 'Observability: SLO dashboards'],
+  ];
+  for (const [teamId, projectId, assigneeId, estimate, title] of backlog) {
+    makeIssue(teamId, null, { assigneeId, estimate, state: 'backlog', priority: 3, title, projectId });
+  }
+  // One API v2 issue already scheduled after the target date.
+  const pltLate = cycles.find((c) => c.teamId === 'team-plt' && c.startDate > projectById.get('prj-api')!.targetDate!)!;
+  makeIssue('team-plt', pltLate, { assigneeId: 'u-chen', estimate: 5, state: 'unstarted', priority: 2, title: 'API v2: rate-limit tiers', projectId: 'prj-api' });
+
+  return { source: 'demo', organizationName: 'Acme (demo)', urlKey: 'acme', fetchedAt, demoSeedDay: today, teams, people, cycles, issues, projects };
 }
 
 /** OOO CSV for the demo workspace, relative to `today`. Also written to samples/ooo-sample.csv. */

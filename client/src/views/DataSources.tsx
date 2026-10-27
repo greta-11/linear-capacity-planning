@@ -6,20 +6,18 @@ import { ago, dateTime, formatRange, pct } from '../format';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-export function DataSources() {
+/** Settings drawer: Linear connection details, planner settings, overrides. */
+export function SettingsPanel() {
   return (
     <div className="stack">
-      <div className="grid-2">
-        <LinearCard />
-        <OooCard />
-      </div>
+      <LinearCard />
       <SettingsCard />
       <OverridesCard />
     </div>
   );
 }
 
-function LinearCard() {
+export function LinearCard() {
   const { state } = usePlanner();
   const pull = usePull();
   const reset = useResetDemo();
@@ -81,7 +79,7 @@ npm run dev              # restart the app`}</pre>
   );
 }
 
-function OooCard() {
+export function OooCard() {
   const { state } = usePlanner();
   const imp = useImportOoo();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -105,9 +103,8 @@ function OooCard() {
 
   return (
     <section className="card" data-testid="ooo-card">
-      <h2>Out of office (CSV)</h2>
       <p className="small">
-        OOO is read-only in the planner: it comes from your HR system. To change it, fix it there, export a new CSV, and import it here (or run <code>npm run import:ooo -- ./ooo.csv</code>).
+        OOO comes from a Workday export. To change it, fix it in Workday, export a new CSV, and import it here (or run <code>npm run import:ooo -- ./ooo.csv</code>).
       </p>
       <dl className="facts">
         <dt>Current file</dt>
@@ -210,7 +207,7 @@ function EntryList({ title, entries }: { title: string; entries: OooPreview['dif
   );
 }
 
-function SettingsCard() {
+export function SettingsCard() {
   const { state } = usePlanner();
   const save = useSaveSettings();
   const reset = useResetSettings();
@@ -275,7 +272,7 @@ function SettingsCard() {
   );
 }
 
-function OverridesCard() {
+export function OverridesCard() {
   const { state, model } = usePlanner();
   const p = state.planner;
   const rows = [

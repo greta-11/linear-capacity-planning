@@ -1,7 +1,7 @@
 import { addDays } from '../../shared/calendar';
 import type { Day, Snapshot } from '../../shared/types';
 import { gql, paginate } from './client';
-import { normalizeSnapshot, type RawCycle, type RawIssue, type RawTeam } from './normalize';
+import { normalizeSnapshot, type RawCycle, type RawIssue, type RawProject, type RawTeam } from './normalize';
 
 // Page sizes are kept small enough to stay well under Linear's query complexity limit.
 
@@ -42,9 +42,42 @@ const ISSUES = /* GraphQL */ `
         assignee { id name displayName email avatarUrl active }
         team { id }
         cycle { id }
-        project { name }
+        project { id name }
         labels(first: 10) { nodes { name } }
         history(first: 25) @include(if: $withHistory) { nodes { createdAt toCycleId } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+// Open projects (not completed or canceled), for target dates and project risk.
+const PROJECTS = /* GraphQL */ `
+  query Projects($after: String) {
+    projects(first: 50, after: $after, filter: { completedAt: { null: true }, canceledAt: { null: true } }) {
+      nodes {
+        id name url targetDate startDate progress health
+        status { type name }
+        lead { id }
+        teams(first: 20) { nodes { id } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+// Open issues of those projects, including backlog issues with no cycle.
+const PROJECT_ISSUES = /* GraphQL */ `
+  query ProjectIssues($projectIds: [ID!], $after: String) {
+    issues(first: 50, after: $after, filter: { project: { id: { in: $projectIds } }, state: { type: { nin: ["completed", "canceled"] } } }) {
+      nodes {
+        id identifier title url priority estimate createdAt updatedAt completedAt canceledAt
+        state { type name }
+        assignee { id name displayName email avatarUrl active }
+        team { id }
+        cycle { id }
+        project { id name }
+        labels(first: 10) { nodes { name } }
       }
       pageInfo { hasNextPage endCursor }
     }
@@ -99,9 +132,16 @@ export async function fetchSnapshot(apiKey: string, today: Day, lookbackCycles: 
       issues.push(...(await paginate<{ issues: Conn<RawIssue> }, RawIssue>(apiKey, ISSUES, { cycleIds: chunk, withHistory }, (d) => d.issues)));
     }
   }
-  onProgress?.(`${issues.length} issues`);
+  const projects = await paginate<{ projects: Conn<RawProject> }, RawProject>(apiKey, PROJECTS, {}, (d) => d.projects);
+  onProgress?.(`${projects.length} open projects`);
+  const projectIds = projects.map((p) => p.id);
+  for (let i = 0; i < projectIds.length; i += 10) {
+    const chunk = projectIds.slice(i, i + 10);
+    issues.push(...(await paginate<{ issues: Conn<RawIssue> }, RawIssue>(apiKey, PROJECT_ISSUES, { projectIds: chunk }, (d) => d.issues)));
+  }
+  onProgress?.(`${issues.length} issues (cycle + project work)`);
 
-  return normalizeSnapshot({ organization, teams, cycles, issues, fetchedAt: new Date().toISOString() });
+  return normalizeSnapshot({ organization, teams, cycles, issues, projects, fetchedAt: new Date().toISOString() });
 }
 
 export interface LiveIssue {

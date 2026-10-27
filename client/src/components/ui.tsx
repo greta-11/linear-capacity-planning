@@ -56,7 +56,7 @@ export function CycleLabel({ id }: { id: string | null }) {
   const c = model.cycles.get(id);
   if (!c) return <span className="muted">Unknown cycle</span>;
   return (
-    <span title={`${c.startDate} → ${c.endDate}`}>
+    <span className="nowrap" title={`${c.startDate} → ${c.endDate}`}>
       {cycleName(c, model.teams.get(c.teamId))}
     </span>
   );
@@ -81,6 +81,9 @@ export function IssueTable({
   points,
   showCycle = true,
   showAssignee = true,
+  showProject = true,
+  showState = true,
+  showPriority = true,
 }: {
   issueIds: string[];
   highlight?: Set<string>;
@@ -88,6 +91,9 @@ export function IssueTable({
   points?: Record<string, number>;
   showCycle?: boolean;
   showAssignee?: boolean;
+  showProject?: boolean;
+  showState?: boolean;
+  showPriority?: boolean;
 }) {
   const { model } = usePlanner();
   if (!issueIds.length) return <p className="muted small">No issues.</p>;
@@ -100,8 +106,9 @@ export function IssueTable({
             <th>Title</th>
             {showAssignee && <th>Assignee</th>}
             {showCycle && <th>Cycle</th>}
-            <th>State</th>
-            <th>Priority</th>
+            {showProject && <th>Project</th>}
+            {showState && <th>State</th>}
+            {showPriority && <th>Priority</th>}
             <th className="num">Estimate</th>
             {points && <th className="num">In range</th>}
             {notes && <th>Note</th>}
@@ -132,8 +139,9 @@ export function IssueTable({
                     <CycleLabel id={issue.cycleId} />
                   </td>
                 )}
-                <td>{issue.stateName}</td>
-                <td>{PRIORITY_LABEL[issue.priority] ?? '—'}</td>
+                {showProject && <td className="truncate-sm">{issue.projectId ? (model.projects.get(issue.projectId)?.name ?? issue.projectName) : <span className="muted">—</span>}</td>}
+                {showState && <td>{issue.stateName}</td>}
+                {showPriority && <td>{PRIORITY_LABEL[issue.priority] ?? '—'}</td>}
                 <td className="num">{unestimated ? <span className="muted" title="Unestimated: counted at the team median">~{pts(p)}</span> : pts(p)}</td>
                 {points && <td className="num">{points[id] != null ? pts(points[id]) : '—'}</td>}
                 {notes && <td className="small">{notes[id] ?? ''}</td>}

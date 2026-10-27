@@ -40,6 +40,24 @@ export interface Cycle {
   completedAt: string | null;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  url: string;
+  /** Target delivery day, if set. */
+  targetDate: Day | null;
+  startDate: Day | null;
+  /** Linear project status category (backlog, planned, started, paused, completed, canceled). */
+  statusType: string;
+  statusName: string;
+  /** Health from the latest project update in Linear. */
+  health: 'onTrack' | 'atRisk' | 'offTrack' | null;
+  /** 0..1, as reported by Linear. */
+  progress: number;
+  leadId: string | null;
+  teamIds: string[];
+}
+
 export interface Issue {
   id: string;
   identifier: string;
@@ -53,6 +71,7 @@ export interface Issue {
   priority: number;
   stateType: StateType;
   stateName: string;
+  projectId: string | null;
   projectName: string | null;
   labels: string[];
   createdAt: string;
@@ -75,7 +94,11 @@ export interface Snapshot {
   people: Person[];
   cycles: Cycle[];
   issues: Issue[];
+  projects: Project[];
 }
+
+/** How each person's points-per-working-day is derived. */
+export type VelocityMode = { kind: 'history' } | { kind: 'team-average' } | { kind: 'manual'; pointsPerWeek: number };
 
 export interface SyncRecord {
   at: string;

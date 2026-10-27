@@ -2,13 +2,13 @@
 
 A local web app for Linear teams that answers three questions:
 
-1. **Where are we overcommitted?** Current and future capacity per team (by cycle) and per person (by week).
-2. **Why?** Load broken down into planned work, absences, shared commitments (people on several teams), and unplanned work.
+1. **Which projects are at risk?** A risk score per project, built from the capacity of the people doing the work through its target date.
+2. **Where are we overcommitted, and why?** A capacity heat map of people and teams over configurable periods. Click any cell to see what makes up the load: planned work, absences, shared commitments (people on several teams), and unplanned work.
 3. **What can we do about it?** Rule-based recommendations, each showing the evidence it was built from. Accepted changes are either synced back to Linear or kept as planner-only assumptions. OOO data only changes through a new CSV import.
 
-Data sources:
-- **Linear**, through the GraphQL API: teams, members, cycles, issues and issue history.
-- **Out-of-office data** from a CSV export of your HR system.
+Data sources, shown in the strip at the top of the app, each with its own **Sync** button:
+- **Linear**, through the GraphQL API: teams, members, cycles, projects, issues and issue history.
+- **Workday OOO**, from a CSV export. There is no live Workday connection: **Sync** re-reads and re-validates the imported export, and **Import CSV** loads a new one.
 
 Without an API key it runs on a generated demo workspace, so you can try it right away.
 
@@ -25,7 +25,7 @@ npm install
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. With no API key configured, the header says **Demo data**.
+Open **http://127.0.0.1:5173**. With no API key configured, the Linear card says **Demo data**.
 
 ### Add your Linear API key
 
@@ -51,7 +51,7 @@ export LINEAR_API_KEY=lin_api_xxxxxxxxxxxxxxxx
 npm run check:linear
 ```
 
-4. Restart the app (`Ctrl+C`, then `npm run dev`). The header switches to **Linear**. Click **Sync from Linear** at any time to re-pull.
+4. Restart the app (`Ctrl+C`, then `npm run dev`). The Linear card switches to **Live**. Click **Sync** on the Linear card at any time to re-pull.
 
 ### Provide OOO data (CSV)
 
@@ -92,7 +92,7 @@ The command prints how many rows were added or removed compared with the current
 
 Rows with errors are skipped and show up in the app as "Update via CSV" to-dos. The command exits non-zero only when nothing could be imported. Reload the app to see the new data.
 
-You can also import from the UI under **Data sources → Choose CSV…**, which shows the same preview before replacing the data.
+You can also import from the UI with **Import CSV** on the Workday card, which shows the same preview before replacing the data.
 
 **OOO is read-only in the planner.** To change an absence, fix it in your HR system, export again, and re-import.
 
@@ -100,42 +100,68 @@ You can also import from the UI under **Data sources → Choose CSV…**, which 
 
 ## The views
 
-All views share the **date range** filter (current cycle, next 3 cycles, next 12 weeks, rest of the quarter, or a custom range) and the **team** filter. Both are kept in the URL.
+The **data strip** at the top shows each source, when it was last synced, and its **Sync** button. **⚙ Settings** opens Linear connection details, sync history, planner settings and the overrides in effect. The tab and every filter are kept in the URL.
 
-### Team capacity
+### Project risk
 
-*Is my team realistically equipped to deliver the work scheduled across upcoming cycles?*
+*Which projects are at risk of not being delivered?*
 
-- **KPIs:**
-  - available capacity
-  - scheduled load
-  - headroom or overcommitment
-  - cycles at risk
-  - people over capacity
-- **Per-cycle chart:**
-  - stacked load (planned, unplanned added mid-cycle, unplanned reserve, unassigned)
-  - available capacity line
-  - Linear-style "velocity only" capacity for comparison
-  - Hover for the numbers; **Show table** gives an accessible table view.
-- **Cycle drill-down** (click a bar):
-  - *Where the capacity went*: members' full time − absences − time on other teams = available capacity
-  - *Who is carrying it*: each member's share, OOO, load, and overall utilization
-  - the cycle's open issues
+Open projects are sorted by risk score (0–100). Each row shows:
+- the level (High ≥ 50, Medium ≥ 25, Low)
+- the target date and days left
+- the **number of teams and people** involved
+- remaining points and open issues, and Linear's own progress and health
+- the top drivers, e.g. "Ana 204% through Nov 20 (7 OOO days)"
 
-### Individuals
+The score is computed over the window from today to the target date. Projects without a target date use the next 12 weeks and are flagged.
 
-*Who is overcommitted, and why?*
+| Factor | Weight | How it's measured |
+|---|---|---|
+| Capacity pressure | 60% | For each person with project work: their utilization through the target date, counting **all** their work (other projects and teams) and OOO. Each person contributes `(utilization − 85%) ÷ 50%`, capped to 0–100%. The project value is the average, weighted by each person's share of the project's points. |
+| Scheduled after target | 20% | Points in cycles that end after the target date ÷ remaining points |
+| Unassigned | 12% | Unassigned points ÷ remaining points |
+| Unestimated | 8% | Unestimated points (counted at the team median) ÷ remaining points |
 
-- **Heatmap:** utilization for each person and week. Cells are tinted by status, with an icon for at-risk and over. A small ring marks weeks with OOO.
-- **Table**, with one row per person:
-  - velocity (and its source)
-  - capacity and load
-  - whole-range utilization and peak week
-  - a load-vs-capacity breakdown bar (planned, shared commitments, unplanned + reserve, absences)
-  - a plain-language **why**, e.g. "7 OOO days (vacation) removes 8.9 pts of capacity · 43.6 pts committed to Web"
-- **Expanding a row** shows the capacity math, the evidence behind the velocity, the OOO rows (with their CSV row numbers), and every scheduled issue with the points that land in the range.
+`score = Σ weight × factor`. A project past its target date with open work scores 100.
 
-### Adjustments
+Expanding a row shows the factor table with each factor's contribution, the people involved (their project points, all their load and their capacity through the target date) and the open issues, with issues scheduled after the target highlighted. **Open in heat map** jumps to the heat map filtered to that project.
+
+### Capacity heat map
+
+*Who and which teams are over capacity, in which period, and why?*
+
+- **Columns** are periods of *x* **weeks, months or quarters**: for example 2 weeks × 6, or 1 quarter × 4. Weeks start on Monday, months on the 1st, quarters in Jan/Apr/Jul/Oct, and the first period starts today.
+- **Cells** show load as a % of capacity, tinted by status. A ring marks periods with OOO.
+- **Rows are grouped by team.**
+  - Each team's summary row compares the team's work with its members' time on that team.
+  - Person rows show the person's whole load across all teams and projects.
+  - People on several teams appear under each team with an "also on …" chip.
+- **Filters** for projects, teams and people. A project filter keeps the people working on that project and outlines the cells that contain its work.
+- **Velocity** (applies to every tab):
+
+  | Mode | How each person's points per working day are set |
+  |---|---|
+  | Historical (default) | Their own completed issues over the last 3 completed cycles, OOO-adjusted |
+  | Team average | The average historical velocity of their team(s) |
+  | Points per week | One number for everyone, converted to points per working day |
+
+  Capacity is computed per working day, so changing the period length rescales it automatically. The toolbar shows the per-period equivalent, e.g. "20 pts per 2-week period".
+- **Click any cell** to open a drawer:
+  - **Person cell:**
+    - the capacity math (velocity, working days, OOO rows from the CSV)
+    - what makes up the load (planned cycle work, work added mid-cycle, unscheduled project work, unplanned reserve)
+    - the load broken down by team and by project
+    - every issue in the period, with the share of its points that falls in that period
+  - **Team cell:**
+    - where the capacity went (members' full time − absences − time on other teams)
+    - what the team is asked to carry
+    - its members
+    - its issues
+
+### Recommendations
+
+Recommendations have their own cycle-range and team filters.
+
 
 Each recommendation names its destination and has an **evidence panel** with:
 - **Trigger:** the metric and threshold that fired, e.g. "Ana in PLT Cycle 47: 12.4 pts load vs 3.8 pts capacity = 326% · over above 115%".
@@ -169,19 +195,7 @@ The **change ledger** groups accepted items by destination:
 - **Keep in planner:** takes effect immediately, is stored in `data/planner.json` with who and when, and can be reverted.
 - **Update via CSV:** to-dos for the OOO source system.
 
-When **Sync from Linear** runs, accepted-but-unapplied changes whose issue changed upstream are flagged **Out of date**.
-
-### Data sources
-
-- Linear connection status and sync history, plus **Sync now**. In demo mode there is also **Reset demo data**.
-- OOO import with a preview diff, download of the current data, and the template.
-- Planner settings:
-  - working days
-  - default velocity
-  - lookback cycles
-  - default unplanned reserve
-  - status thresholds
-- The planner overrides currently in effect.
+When Linear is synced, accepted-but-unapplied changes whose issue changed upstream are flagged **Out of date**.
 
 ---
 
@@ -193,11 +207,13 @@ Everything is in **estimate points**. Teams with estimates turned off count each
   - Completed points across the last *N* completed cycles of their teams (default 3), divided by their available days in that window.
   - **OOO days are excluded from the denominator**, so a vacation doesn't make someone look slow.
   - Needs 3+ completed issues; otherwise it falls back to the team average, then to the default. It can be overridden in the planner.
+  - The heat map's velocity control can switch every tab to the team average or to a fixed number of points per week.
 - **Capacity** = velocity × (working days − OOO days).
   - Half days count as 0.5.
   - Overlapping OOO rows count once per day.
 - **Load:**
-  - Each open issue's points are spread evenly over the remaining working days of its cycle. Weekly and range views pick up the share that falls inside them.
+  - Each open issue's points are spread evenly over the remaining working days of its cycle. Any period picks up the share that falls inside it.
+  - **Unscheduled project work:** open project issues with no cycle are spread from today to the project's target date. If the target date has passed, they go on the current week. Issues in projects with no target date don't count as load, but they do count in that project's risk.
   - Unestimated issues count at the team's median estimate and are flagged.
 - **Planned vs unplanned:**
   - An issue is unplanned if it entered its cycle after the cycle's first day (from Linear issue history; falls back to the creation date).
@@ -207,7 +223,7 @@ Everything is in **estimate points**. Teams with estimates turned off count each
   - In a team view, each member contributes capacity × their **time split** for that team. The split defaults to their historical completed points per team and can be overridden.
   - The rest shows as "time on other teams".
 - **Status:** under < 70% ≤ healthy ≤ 100% < at risk ≤ 115% < over. All thresholds are configurable.
-- Only cycle-scheduled work counts as load. Issues without a cycle, and teams with cycles disabled, contribute capacity but no scheduled load.
+- Work with neither a cycle nor a dated project doesn't count as load. Teams with cycles disabled therefore contribute only their project work.
 
 ---
 
@@ -217,7 +233,7 @@ Everything is in **estimate points**. Teams with estimates turned off count each
 |---|---|
 | `npm run dev` | API server on `127.0.0.1:4000` plus the UI on `127.0.0.1:5173` (hot reload) |
 | `npm run build && npm start` | Production build, served from `http://127.0.0.1:4000` |
-| `npm run check:linear` | Verify `LINEAR_API_KEY` and summarise what a sync would pull |
+| `npm run check:linear` | Verify `LINEAR_API_KEY` and summarise what a sync would pull (teams, cycles, issues, projects) |
 | `npm run import:ooo -- <file.csv> [--dry-run]` | Validate and import an OOO CSV |
 | `npm test` | Unit tests (capacity engine, recommendations, CSV parsing) |
 | `npm run typecheck` | TypeScript across server, client and tests |
@@ -230,6 +246,7 @@ Local state lives in `data/` (gitignored):
 | `ooo.json` | Last imported CSV |
 | `planner.json` | Settings, overrides, ledger, dismissed recommendations |
 | `sync-history.json` | Recent syncs |
+| `workday.json` | Last Workday (CSV) sync time |
 | `demo-workspace.json` | Demo mode only |
 
 Delete the folder to start fresh. Set `DATA_DIR` to keep it elsewhere.
@@ -238,8 +255,9 @@ Delete the folder to start fresh. Set `DATA_DIR` to keep it elsewhere.
 
 ```
 shared/        Pure TypeScript used by server and browser
-  calendar.ts         working days, ranges, week buckets
-  capacity.ts         capacity engine (velocity, OOO, load spreading, allocation, summaries)
+  calendar.ts         working days, ranges, week/month/quarter periods
+  capacity.ts         capacity engine (velocity modes, OOO, load spreading, allocation, person/team windows)
+  projects.ts         project risk score and factors
   recommendations.ts  rules + evidence
   changes.ts          destinations (Linear / planner / CSV), planner apply/revert
 server/        Express API (binds to 127.0.0.1 only)

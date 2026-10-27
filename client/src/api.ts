@@ -8,6 +8,7 @@ export interface AppState {
   ooo: OooDataset | null;
   planner: PlannerState;
   syncHistory: SyncRecord[];
+  workdaySyncedAt: string | null;
   dataDir: string;
 }
 
@@ -63,5 +64,7 @@ export const useDismiss = () => useInvalidating((v: { id: string; dismissed: boo
 export const useSaveSettings = () => useInvalidating((s: Settings) => request<Settings>('PUT', '/api/settings', s));
 export const useResetSettings = () => useInvalidating(() => request<Settings>('POST', '/api/settings/reset'));
 export const useImportOoo = () => useInvalidating((v: { fileName: string; csv: string }) => request<OooDataset>('POST', '/api/ooo', v));
+export const useWorkdaySync = () =>
+  useInvalidating(() => request<{ at: string; fileName: string | null; entries: number; problems: number }>('POST', '/api/workday/sync'));
 export const useResetDemo = () => useInvalidating(() => request<{ ok: boolean }>('POST', '/api/demo/reset'));
 export const previewOoo = (v: { fileName: string; csv: string }) => request<OooPreview>('POST', '/api/ooo/preview', v);

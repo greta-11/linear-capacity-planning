@@ -1,5 +1,5 @@
 import { dayInTimezone } from '../../shared/calendar';
-import type { Cycle, Issue, Person, Snapshot, StateType, Team } from '../../shared/types';
+import type { Cycle, Issue, Person, Project, Snapshot, StateType, Team } from '../../shared/types';
 
 // Raw GraphQL shapes → domain model.
 
@@ -33,6 +33,19 @@ export interface RawCycle {
   team: { id: string };
 }
 
+export interface RawProject {
+  id: string;
+  name: string;
+  url: string;
+  targetDate: string | null;
+  startDate: string | null;
+  progress: number | null;
+  health: string | null;
+  status: { type: string; name: string } | null;
+  lead: { id: string } | null;
+  teams: { nodes: { id: string }[] };
+}
+
 export interface RawIssue {
   id: string;
   identifier: string;
@@ -48,7 +61,7 @@ export interface RawIssue {
   assignee: RawUser | null;
   team: { id: string };
   cycle: { id: string } | null;
-  project: { name: string } | null;
+  project: { id: string; name: string } | null;
   labels: { nodes: { name: string }[] } | null;
   history?: { nodes: { createdAt: string; toCycleId: string | null }[] };
 }
@@ -60,6 +73,7 @@ export function normalizeSnapshot(raw: {
   teams: RawTeam[];
   cycles: RawCycle[];
   issues: RawIssue[];
+  projects: RawProject[];
   fetchedAt: string;
 }): Snapshot {
   const people = new Map<string, Person>();
@@ -107,7 +121,8 @@ export function normalizeSnapshot(raw: {
     };
   });
 
-  const issues: Issue[] = raw.issues.map((i) => {
+  const unique = [...new Map(raw.issues.map((i) => [i.id, i])).values()];
+  const issues: Issue[] = unique.map((i) => {
     if (i.assignee) addPerson(i.assignee, null);
     const cycleId = i.cycle?.id ?? null;
     const entered = (i.history?.nodes ?? []).filter((h) => cycleId && h.toCycleId === cycleId).map((h) => h.createdAt).sort();
@@ -124,6 +139,7 @@ export function normalizeSnapshot(raw: {
       priority: i.priority ?? 0,
       stateType,
       stateName: i.state?.name ?? stateType,
+      projectId: i.project?.id ?? null,
       projectName: i.project?.name ?? null,
       labels: (i.labels?.nodes ?? []).map((l) => l.name),
       createdAt: i.createdAt,
@@ -135,6 +151,21 @@ export function normalizeSnapshot(raw: {
     };
   });
 
+  const HEALTH = new Set(['onTrack', 'atRisk', 'offTrack']);
+  const projects: Project[] = raw.projects.map((p) => ({
+    id: p.id,
+    name: p.name,
+    url: p.url,
+    targetDate: p.targetDate,
+    startDate: p.startDate,
+    statusType: p.status?.type ?? 'planned',
+    statusName: p.status?.name ?? 'Planned',
+    health: p.health && HEALTH.has(p.health) ? (p.health as Project['health']) : null,
+    progress: p.progress ?? 0,
+    leadId: p.lead?.id ?? null,
+    teamIds: p.teams.nodes.map((t) => t.id),
+  }));
+
   return {
     source: 'linear',
     organizationName: raw.organization.name,
@@ -144,5 +175,6 @@ export function normalizeSnapshot(raw: {
     people: [...people.values()],
     cycles,
     issues,
+    projects,
   };
 }

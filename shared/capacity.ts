@@ -10,7 +10,7 @@ import {
   weekStart,
   type Bucket,
 } from './calendar';
-import type { Cycle, Day, Issue, OooDataset, OooEntry, Person, PlannerState, Settings, Snapshot, Team } from './types';
+import type { Cycle, Day, Issue, OooDataset, OooEntry, Person, PlannerState, Project, Settings, Snapshot, Team, VelocityMode } from './types';
 
 // Capacity engine. Everything is computed in points (or issue counts for teams
 // that don't estimate) from today forward, and every number keeps references to
@@ -24,11 +24,13 @@ export interface CapacityInput {
   planner: PlannerState;
   range: { from: Day; to: Day };
   today: Day;
+  /** Defaults to per-person history. */
+  velocityMode?: VelocityMode;
 }
 
 export interface VelocityInfo {
   value: number;
-  source: 'history' | 'team-average' | 'default' | 'override';
+  source: 'history' | 'team-average' | 'default' | 'override' | 'manual';
   /** Velocity measured from the person's own history, even when not used. */
   historyValue: number | null;
   points: number;
@@ -54,21 +56,29 @@ export interface UnplannedHistory {
   cycles: { cycleId: string; total: number; unplanned: number; issueIds: string[] }[];
 }
 
+export type LoadKind = 'planned' | 'unplanned' | 'unscheduled';
+
 export interface LoadItem {
   issueId: string;
   teamId: string;
-  cycleId: string;
-  kind: 'planned' | 'unplanned';
+  assigneeId: string | null;
+  /** Null for unscheduled project work (no cycle; spread to the project's target date). */
+  cycleId: string | null;
+  projectId: string | null;
+  kind: LoadKind;
   /** Points falling inside the window. */
   points: number;
   /** Points of the whole issue. */
   fullPoints: number;
   unestimated: boolean;
+  /** Unscheduled work whose project target date has already passed. */
+  overdue?: boolean;
 }
 
 export interface TeamLoad {
   planned: number;
   unplanned: number;
+  unscheduled: number;
   reserve: number;
 }
 
@@ -93,6 +103,7 @@ export interface PersonWindow {
 export interface Breakdown {
   planned: number;
   unplanned: number;
+  unscheduled: number;
   shared: number;
   sharedByTeam: Record<string, number>;
   absence: number;
@@ -125,11 +136,9 @@ export interface TeamCycleMember {
   status: Status;
 }
 
-export interface TeamCycleSummary {
-  cycle: Cycle;
+export interface TeamWindow {
   start: Day;
   end: Day;
-  isActive: boolean;
   /** Members' whole working time, before absences and other teams. */
   fullGross: number;
   /** Capacity removed by members' absences (whole person). */
@@ -143,15 +152,22 @@ export interface TeamCycleSummary {
   capacity: number;
   planned: number;
   unplanned: number;
+  unscheduled: number;
   reserve: number;
   unassigned: number;
   load: number;
   utilization: number | null;
   status: Status;
+  items: LoadItem[];
   unestimatedIssueIds: string[];
-  linearStyleCapacity: number | null;
-  members: TeamCycleMember[];
   issueIds: string[];
+  members: TeamCycleMember[];
+}
+
+export interface TeamCycleSummary extends TeamWindow {
+  cycle: Cycle;
+  isActive: boolean;
+  linearStyleCapacity: number | null;
 }
 
 export interface TeamSummary {
@@ -172,6 +188,7 @@ export interface CapacityModel {
   people: Map<string, Person>;
   cycles: Map<string, Cycle>;
   issues: Map<string, Issue>;
+  projects: Map<string, Project>;
   oooEntries: Map<string, OooEntry>;
   velocity: Map<string, VelocityInfo>;
   allocation: Map<string, AllocationInfo>;
@@ -184,6 +201,9 @@ export interface CapacityModel {
   completedCyclesOf(teamId: string): Cycle[];
   upcomingCyclesOf(teamId: string): Cycle[];
   personWindow(personId: string, start: Day, end: Day): PersonWindow;
+  /** Open work of a team (assigned or not) that falls inside the window. */
+  teamItems(teamId: string, start: Day, end: Day): LoadItem[];
+  velocityMode: VelocityMode;
   unplannedKind(issue: Issue): 'planned' | 'unplanned';
   teamName(teamId: string): string;
   cycleLabel(cycleId: string): string;
@@ -229,6 +249,10 @@ function median(values: number[]): number | null {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+export function teamLoadTotal(l: TeamLoad): number {
+  return l.planned + l.unplanned + l.unscheduled + l.reserve;
+}
+
 export function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
@@ -244,6 +268,8 @@ export function buildModel(input: CapacityInput): CapacityModel {
   const people = new Map(snapshot.people.map((p) => [p.id, p]));
   const cycles = new Map(snapshot.cycles.map((c) => [c.id, c]));
   const issues = new Map(snapshot.issues.map((i) => [i.id, i]));
+  const projects = new Map((snapshot.projects ?? []).map((p) => [p.id, p]));
+  const velocityMode: VelocityMode = input.velocityMode ?? { kind: 'history' };
   const oooEntries = new Map((input.ooo?.entries ?? []).map((e) => [e.id, e]));
 
   const cyclesByTeam = new Map<string, Cycle[]>();
@@ -385,40 +411,63 @@ export function buildModel(input: CapacityInput): CapacityModel {
         v.source = 'default';
       }
     }
-    const override = planner.velocityOverrides[p.id];
-    if (override != null) {
-      v.value = override;
-      v.source = 'override';
+    if (velocityMode.kind === 'history') {
+      const override = planner.velocityOverrides[p.id];
+      if (override != null) {
+        v.value = override;
+        v.source = 'override';
+      }
+    } else if (velocityMode.kind === 'team-average') {
+      const avgs = p.teamIds.map((t) => teamAvgVelocity.get(t)).filter((x): x is number => x != null);
+      v.value = avgs.length ? avgs.reduce((a, b) => a + b, 0) / avgs.length : settings.defaultVelocity;
+      v.source = avgs.length ? 'team-average' : 'default';
+    } else {
+      // Points per week → points per working day, so any period length rescales it.
+      v.value = Math.max(0, velocityMode.pointsPerWeek) / Math.max(1, workDays.length);
+      v.source = 'manual';
     }
   }
 
   // --- Spread of open work over working days -----------------------------
+  // Cycle work is spread over the cycle's remaining working days. Project work with
+  // no cycle is spread from today to the project's target date (or over the current
+  // week when the target date has passed).
   interface Spread {
     issue: Issue;
-    cycle: Cycle;
+    cycle: Cycle | null;
     start: Day;
     end: Day;
     days: number;
     points: number;
     unestimated: boolean;
-    kind: 'planned' | 'unplanned';
-    /** The remaining cycle has no working days; all points land on its last day. */
+    kind: LoadKind;
+    overdue: boolean;
+    /** The spread has no working days; all points land on its last day. */
     noWorkDays: boolean;
   }
   const spreads: Spread[] = [];
-  for (const i of snapshot.issues) {
-    if (!i.cycleId || !isOpen(i)) continue;
-    const c = cycles.get(i.cycleId);
-    if (!c || isCompletedCycle(c)) continue;
-    let start = maxDay(c.startDate, today);
-    let days = countWorkingDays(start, c.endDate, workDays);
+  const addSpread = (issue: Issue, cycle: Cycle | null, start: Day, end: Day, kind: LoadKind, overdue = false) => {
+    let days = countWorkingDays(start, end, workDays);
     const noWorkDays = days === 0;
     if (noWorkDays) {
-      start = c.endDate;
+      start = end;
       days = 1;
     }
-    const { points, unestimated } = pointsOf(i);
-    spreads.push({ issue: i, cycle: c, start, end: c.endDate, days, points, unestimated, kind: unplannedKind(i), noWorkDays });
+    const { points, unestimated } = pointsOf(issue);
+    spreads.push({ issue, cycle, start, end, days, points, unestimated, kind, overdue, noWorkDays });
+  };
+  for (const i of snapshot.issues) {
+    if (!isOpen(i)) continue;
+    if (i.cycleId) {
+      const c = cycles.get(i.cycleId);
+      if (!c || isCompletedCycle(c)) continue;
+      addSpread(i, c, maxDay(c.startDate, today), c.endDate, unplannedKind(i));
+      continue;
+    }
+    const project = i.projectId ? projects.get(i.projectId) : undefined;
+    if (!project?.targetDate) continue;
+    const overdue = project.targetDate < today;
+    addSpread(i, null, today, overdue ? addDays(weekStart(today), 6) : project.targetDate, 'unscheduled', overdue);
   }
   const spreadsByAssignee = new Map<string | null, Spread[]>();
   for (const s of spreads) {
@@ -431,6 +480,28 @@ export function buildModel(input: CapacityInput): CapacityModel {
     if (!ov) return 0;
     const wd = s.noWorkDays ? 1 : countWorkingDays(ov[0], ov[1], workDays);
     return (s.points * wd) / s.days;
+  };
+  const toItem = (s: Spread, pts: number): LoadItem => ({
+    issueId: s.issue.id,
+    teamId: s.issue.teamId,
+    assigneeId: s.issue.assigneeId,
+    cycleId: s.cycle?.id ?? null,
+    projectId: s.issue.projectId ?? null,
+    kind: s.kind,
+    points: pts,
+    fullPoints: s.points,
+    unestimated: s.unestimated,
+    ...(s.overdue ? { overdue: true } : {}),
+  });
+  const spreadsByTeam = new Map<string, Spread[]>();
+  for (const s of spreads) spreadsByTeam.set(s.issue.teamId, [...(spreadsByTeam.get(s.issue.teamId) ?? []), s]);
+  const teamItems = (teamId: string, start: Day, end: Day): LoadItem[] => {
+    const out: LoadItem[] = [];
+    for (const s of spreadsByTeam.get(teamId) ?? []) {
+      const pts = portion(s, start, end);
+      if (pts > 0) out.push(toItem(s, pts));
+    }
+    return out;
   };
 
   // --- Allocation --------------------------------------------------------
@@ -517,14 +588,14 @@ export function buildModel(input: CapacityInput): CapacityModel {
     const absence = v.value * ooo.total;
     const capacity = gross - absence;
     const loadByTeam: Record<string, TeamLoad> = {};
-    const bucket = (t: string) => (loadByTeam[t] ??= { planned: 0, unplanned: 0, reserve: 0 });
+    const bucket = (t: string) => (loadByTeam[t] ??= { planned: 0, unplanned: 0, unscheduled: 0, reserve: 0 });
     for (const t of person.teamIds) bucket(t);
     const items: LoadItem[] = [];
     for (const s of spreadsByAssignee.get(personId) ?? []) {
       const pts = portion(s, start, end);
       if (pts <= 0) continue;
       bucket(s.issue.teamId)[s.kind] += pts;
-      items.push({ issueId: s.issue.id, teamId: s.issue.teamId, cycleId: s.cycle.id, kind: s.kind, points: pts, fullPoints: s.points, unestimated: s.unestimated });
+      items.push(toItem(s, pts));
     }
     for (const t of person.teamIds) {
       const buffer = unplanned.get(t)?.buffer ?? 0;
@@ -537,7 +608,7 @@ export function buildModel(input: CapacityInput): CapacityModel {
       }
       bucket(t).reserve += reserve;
     }
-    const load = Object.values(loadByTeam).reduce((a, l) => a + l.planned + l.unplanned + l.reserve, 0);
+    const load = Object.values(loadByTeam).reduce((a, l) => a + teamLoadTotal(l), 0);
     return { start, end, workingDays: wdays.length, oooDays: ooo.total, oooEntries: ooo.byEntry, gross, absence, capacity, loadByTeam, items, load, ...classify(load, capacity, settings) };
   };
 
@@ -555,6 +626,7 @@ export function buildModel(input: CapacityInput): CapacityModel {
     people,
     cycles,
     issues,
+    projects,
     oooEntries,
     velocity,
     allocation,
@@ -567,6 +639,8 @@ export function buildModel(input: CapacityInput): CapacityModel {
     completedCyclesOf,
     upcomingCyclesOf,
     personWindow,
+    teamItems,
+    velocityMode,
     unplannedKind,
     teamName,
     cycleLabel,
@@ -575,6 +649,77 @@ export function buildModel(input: CapacityInput): CapacityModel {
 
 // ---------------------------------------------------------------------------
 // Team view
+
+/** Open work of a team in a window, against its members' allocated capacity. */
+export function teamWindow(model: CapacityModel, teamId: string, start: Day, end: Day): TeamWindow {
+  const team = model.teams.get(teamId)!;
+  const settings = model.input.planner.settings;
+  let fullGross = 0;
+  let fullAbsence = 0;
+  let gross = 0;
+  let absence = 0;
+  let sharedLost = 0;
+  let reserve = 0;
+  const members: TeamCycleMember[] = [];
+  for (const pid of team.memberIds) {
+    const person = model.people.get(pid);
+    if (!person?.active) continue;
+    const w = model.personWindow(pid, start, end);
+    const share = model.allocation.get(pid)!.shares[teamId] ?? 0;
+    fullGross += w.gross;
+    fullAbsence += w.absence;
+    gross += w.gross * share;
+    absence += w.absence * share;
+    sharedLost += w.capacity * (1 - share);
+    const teamReserve = w.loadByTeam[teamId]?.reserve ?? 0;
+    reserve += teamReserve;
+    const teamLoad = w.items.filter((i) => i.teamId === teamId).reduce((a, i) => a + i.points, 0);
+    members.push({
+      personId: pid,
+      share,
+      capacity: w.capacity * share,
+      teamLoad,
+      otherTeamLoad: w.load - teamLoad - teamReserve,
+      oooDays: w.oooDays,
+      utilization: w.utilization,
+      status: w.status,
+    });
+  }
+  const items = model.teamItems(teamId, start, end);
+  let planned = 0;
+  let unplanned = 0;
+  let unscheduled = 0;
+  let unassigned = 0;
+  for (const i of items) {
+    if (!i.assigneeId) unassigned += i.points;
+    else if (i.kind === 'unplanned') unplanned += i.points;
+    else if (i.kind === 'unscheduled') unscheduled += i.points;
+    else planned += i.points;
+  }
+  const capacity = gross - absence;
+  const load = planned + unplanned + unscheduled + unassigned + reserve;
+  return {
+    start,
+    end,
+    fullGross,
+    fullAbsence,
+    gross,
+    absence,
+    sharedLost,
+    capacity,
+    planned,
+    unplanned,
+    unscheduled,
+    reserve,
+    unassigned,
+    load,
+    ...classify(load, capacity, settings),
+    items,
+    unestimatedIssueIds: [...new Set(items.filter((i) => i.unestimated).map((i) => i.issueId))],
+    issueIds: [...new Set(items.map((i) => i.issueId))],
+    members: members.sort((a, b) => (b.utilization ?? Infinity) - (a.utilization ?? Infinity)),
+  };
+}
 
 export function summarizeTeam(model: CapacityModel, teamId: string): TeamSummary {
   const team = model.teams.get(teamId)!;
@@ -585,81 +730,20 @@ export function summarizeTeam(model: CapacityModel, teamId: string): TeamSummary
     const ov = overlap(cycle.startDate, cycle.endDate, model.from, model.to);
     if (!ov) continue;
     const [start, end] = ov;
-    let fullGross = 0;
-    let fullAbsence = 0;
-    let gross = 0;
-    let absence = 0;
-    let sharedLost = 0;
-    let reserve = 0;
-    const members: TeamCycleMember[] = [];
-    for (const pid of team.memberIds) {
-      const person = model.people.get(pid);
-      if (!person?.active) continue;
-      const w = model.personWindow(pid, start, end);
-      const share = model.allocation.get(pid)!.shares[teamId] ?? 0;
-      fullGross += w.gross;
-      fullAbsence += w.absence;
-      gross += w.gross * share;
-      absence += w.absence * share;
-      sharedLost += w.capacity * (1 - share);
-      reserve += w.loadByTeam[teamId]?.reserve ?? 0;
-      const teamLoad = w.items.filter((i) => i.teamId === teamId && i.cycleId === cycle.id).reduce((a, i) => a + i.points, 0);
-      members.push({
-        personId: pid,
-        share,
-        capacity: w.capacity * share,
-        teamLoad,
-        otherTeamLoad: w.load - teamLoad - (w.loadByTeam[teamId]?.reserve ?? 0),
-        oooDays: w.oooDays,
-        utilization: w.utilization,
-        status: w.status,
-      });
-      if (w.status === 'over') peopleOver.add(pid);
-    }
-    // Team load: every open issue in this cycle, prorated to the window.
-    let planned = 0;
-    let unplanned = 0;
-    let unassigned = 0;
-    const unestimatedIssueIds: string[] = [];
-    const issueIds: string[] = [];
-    const fullDays = countWorkingDays(maxDay(cycle.startDate, model.input.today), cycle.endDate, settings.workDays);
-    const windowDays = countWorkingDays(start, end, settings.workDays);
-    const factor = fullDays === 0 ? 1 : Math.min(1, windowDays / fullDays);
-    for (const issue of model.issues.values()) {
-      if (issue.cycleId !== cycle.id || !isOpen(issue)) continue;
-      issueIds.push(issue.id);
-      const { points, unestimated } = model.pointsOf(issue);
-      if (unestimated) unestimatedIssueIds.push(issue.id);
-      const pts = points * factor;
-      if (!issue.assigneeId) unassigned += pts;
-      else if (model.unplannedKind(issue) === 'unplanned') unplanned += pts;
-      else planned += pts;
-    }
-    const capacity = gross - absence;
-    const load = planned + unplanned + unassigned + reserve;
+    const w = teamWindow(model, teamId, start, end);
+    for (const m of w.members) if (m.status === 'over') peopleOver.add(m.personId);
+    // Issue lists are about this cycle; load also includes unscheduled project work in the window.
+    const inCycle = new Set(w.items.filter((i) => i.cycleId === cycle.id).map((i) => i.issueId));
     const avg = model.avgCompletedPerCycle.get(teamId);
     const cycleDays = countWorkingDays(cycle.startDate, cycle.endDate, settings.workDays) || 1;
+    const windowDays = countWorkingDays(start, end, settings.workDays);
     out.push({
+      ...w,
       cycle,
-      start,
-      end,
       isActive: model.isActiveCycle(cycle),
-      fullGross,
-      fullAbsence,
-      gross,
-      absence,
-      sharedLost,
-      capacity,
-      planned,
-      unplanned,
-      reserve,
-      unassigned,
-      load,
-      ...classify(load, capacity, settings),
-      unestimatedIssueIds,
+      unestimatedIssueIds: w.unestimatedIssueIds.filter((id) => inCycle.has(id)),
+      issueIds: w.issueIds.filter((id) => inCycle.has(id)),
       linearStyleCapacity: avg != null ? (avg * windowDays) / cycleDays : null,
-      members: members.sort((a, b) => (b.utilization ?? Infinity) - (a.utilization ?? Infinity)),
-      issueIds,
     });
   }
   const capacity = out.reduce((a, c) => a + c.capacity, 0);
@@ -687,17 +771,19 @@ export function breakdown(window: PersonWindow, focusTeamId: string | null): Bre
   const sharedByTeam: Record<string, number> = {};
   let planned = 0;
   let unplanned = 0;
+  let unscheduled = 0;
   for (const [teamId, l] of Object.entries(window.loadByTeam)) {
     if (teamId === focusTeamId) {
       planned += l.planned;
       unplanned += l.unplanned + l.reserve;
+      unscheduled += l.unscheduled;
     } else {
-      const total = l.planned + l.unplanned + l.reserve;
+      const total = teamLoadTotal(l);
       if (total > 0) sharedByTeam[teamId] = total;
     }
   }
   const shared = Object.values(sharedByTeam).reduce((a, b) => a + b, 0);
-  return { planned, unplanned, shared, sharedByTeam, absence: window.absence, capacity: window.capacity, gross: window.gross, load: window.load };
+  return { planned, unplanned, unscheduled, shared, sharedByTeam, absence: window.absence, capacity: window.capacity, gross: window.gross, load: window.load };
 }
 
 export function focusTeamFor(model: CapacityModel, personId: string, teamFilter: string | null): string | null {
@@ -721,6 +807,8 @@ export function explain(model: CapacityModel, w: PersonWindow, b: Breakdown, foc
   if (actualUnplanned > 0) why.push(`${pts(actualUnplanned)} added mid-cycle (unplanned)`);
   const reserve = Object.values(w.loadByTeam).reduce((a, l) => a + l.reserve, 0);
   if (reserve > 0.5) why.push(`${pts(reserve)} reserved for unplanned work`);
+  const unscheduled = Object.values(w.loadByTeam).reduce((a, l) => a + l.unscheduled, 0);
+  if (unscheduled > 0.05) why.push(`${pts(unscheduled)} of project work with no cycle, spread to target dates`);
   if (focusTeamId && w.capacity > 0 && b.planned > w.capacity) {
     why.push(`planned ${model.teamName(focusTeamId)} work alone is ${Math.round((b.planned / w.capacity) * 100)}% of capacity`);
   }

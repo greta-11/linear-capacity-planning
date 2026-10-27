@@ -71,7 +71,8 @@ async function doPull(): Promise<PullResult> {
 /** Returns the stored snapshot, pulling first when there is none or it came from the other mode. */
 export async function ensureSnapshot(): Promise<Snapshot | null> {
   const s = store.snapshot();
-  if (s && s.source === mode()) return s;
+  // Snapshots saved before projects were synced are pulled again.
+  if (s && s.source === mode() && Array.isArray(s.projects)) return s;
   const res = await pull();
   return res.snapshot;
 }
