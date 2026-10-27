@@ -139,3 +139,15 @@ describe('project risk on the demo workspace', () => {
     expect(api.unassignedPoints).toBe(3);
   });
 });
+
+describe('reserve detail', () => {
+  it('exposes the inputs of the unplanned reserve, only for future cycles', () => {
+    const m = buildModel({ snapshot: fixture(), ooo: null, planner: planner({ unplannedBuffers: { T: 0.2 } }), range, today: TODAY });
+    const future = m.personWindow('A', '2026-11-16', '2026-11-29');
+    const d = future.reserveDetail.T;
+    expect(d).toMatchObject({ days: 10, share: 1, buffer: 0.2, bufferSource: 'override' });
+    expect(d.velocity * d.days * d.share * d.buffer).toBeCloseTo(future.loadByTeam.T.reserve);
+    expect(d.points).toBeCloseTo(future.loadByTeam.T.reserve);
+    expect(m.personWindow('A', '2026-11-02', '2026-11-15').reserveDetail).toEqual({});
+  });
+});

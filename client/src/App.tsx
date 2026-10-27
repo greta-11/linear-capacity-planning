@@ -13,7 +13,7 @@ import { ProjectRisk } from './views/ProjectRisk';
 const VIEWS: { id: View; label: string }[] = [
   { id: 'risk', label: 'Project risk' },
   { id: 'heatmap', label: 'Capacity heat map' },
-  { id: 'recs', label: 'Recommendations' },
+  { id: 'recs', label: 'Recommendations [WIP]' },
 ];
 const UNITS: PeriodUnit[] = ['week', 'month', 'quarter'];
 

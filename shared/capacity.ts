@@ -82,6 +82,20 @@ export interface TeamLoad {
   reserve: number;
 }
 
+/** reserve = velocity × days × share × buffer */
+export interface ReserveDetail {
+  /** Available working days (after OOO) inside the team's future cycles. */
+  days: number;
+  velocity: number;
+  /** Share of the person's time on the team. */
+  share: number;
+  buffer: number;
+  bufferSource: 'override' | 'default';
+  /** Unplanned share measured over the lookback cycles. */
+  measuredRatio: number | null;
+  points: number;
+}
+
 export interface PersonWindow {
   start: Day;
   end: Day;
@@ -95,6 +109,8 @@ export interface PersonWindow {
   capacity: number;
   loadByTeam: Record<string, TeamLoad>;
   items: LoadItem[];
+  /** Inputs of the unplanned reserve, per team (only teams with future-cycle days in the window). */
+  reserveDetail: Record<string, ReserveDetail>;
   load: number;
   utilization: number | null;
   status: Status;
@@ -597,19 +613,36 @@ export function buildModel(input: CapacityInput): CapacityModel {
       bucket(s.issue.teamId)[s.kind] += pts;
       items.push(toItem(s, pts));
     }
+    const reserveDetail: Record<string, ReserveDetail> = {};
     for (const t of person.teamIds) {
-      const buffer = unplanned.get(t)?.buffer ?? 0;
+      const history = unplanned.get(t);
+      const buffer = history?.buffer ?? 0;
       const share = alloc.shares[t] ?? 0;
       if (!buffer || !share) continue;
-      let reserve = 0;
-      for (const d of wdays) {
-        if (!futureCycleOn(t, d)) continue;
-        reserve += v.value * (1 - (ooo.perDay.get(d) ?? 0)) * share * buffer;
-      }
+      // Available days (after OOO) that fall inside this team's future cycles.
+      let days = 0;
+      for (const d of wdays) if (futureCycleOn(t, d)) days += 1 - (ooo.perDay.get(d) ?? 0);
+      if (days <= 0) continue;
+      const reserve = v.value * days * share * buffer;
       bucket(t).reserve += reserve;
+      reserveDetail[t] = { days, velocity: v.value, share, buffer, bufferSource: history!.bufferSource, measuredRatio: history!.ratio, points: reserve };
     }
     const load = Object.values(loadByTeam).reduce((a, l) => a + teamLoadTotal(l), 0);
-    return { start, end, workingDays: wdays.length, oooDays: ooo.total, oooEntries: ooo.byEntry, gross, absence, capacity, loadByTeam, items, load, ...classify(load, capacity, settings) };
+    return {
+      start,
+      end,
+      workingDays: wdays.length,
+      oooDays: ooo.total,
+      oooEntries: ooo.byEntry,
+      gross,
+      absence,
+      capacity,
+      loadByTeam,
+      items,
+      reserveDetail,
+      load,
+      ...classify(load, capacity, settings),
+    };
   };
 
   const teamName = (teamId: string) => teams.get(teamId)?.name ?? 'Unknown team';
