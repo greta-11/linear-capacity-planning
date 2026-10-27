@@ -46,10 +46,15 @@ export const store = {
     const saved = readJson<Partial<PlannerState>>('planner.json');
     const base = emptyPlanner();
     if (!saved) return base;
+    // Older planner files carried ledger and override fields; only settings are kept.
     return {
       ...base,
-      ...saved,
-      settings: { ...DEFAULT_SETTINGS, ...saved.settings, thresholds: { ...DEFAULT_SETTINGS.thresholds, ...saved.settings?.thresholds } },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        ...saved.settings,
+        thresholds: { ...DEFAULT_SETTINGS.thresholds, ...saved.settings?.thresholds },
+        statusWeights: { ...DEFAULT_SETTINGS.statusWeights, ...saved.settings?.statusWeights },
+      },
     };
   },
   savePlanner: (p: PlannerState) => writeJson('planner.json', p),

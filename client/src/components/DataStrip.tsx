@@ -35,7 +35,7 @@ export function DataStrip({ state }: { state: AppState }) {
     pull.mutate(undefined, {
       onSuccess: (r) => {
         const c = r.record.counts!;
-        setToast({ kind: 'ok', text: `Linear synced: ${c.issues} issues, ${c.cycles} cycles, ${c.teams} teams${r.record.staleEntries ? ` · ${r.record.staleEntries} accepted change(s) now out of date` : ''}` });
+        setToast({ kind: 'ok', text: `Linear synced: ${c.issues} issues, ${c.cycles} cycles, ${c.teams} teams` });
       },
       onError: (e) => setToast({ kind: 'error', text: `Linear sync failed — still showing data from ${ago(fetchedAt)}. ${(e as Error).message}` }),
     });

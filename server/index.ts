@@ -7,7 +7,7 @@ import { DEFAULT_SETTINGS } from '../shared/capacity';
 import type { Settings } from '../shared/types';
 import { resetDemoWorkspace } from './demo/workspace';
 import { diffOoo, exportOooCsv, OOO_COLUMNS, parseOooCsv } from './ooo/csv';
-import { accept, applyToLinear, currentOoo, discard, ensureSnapshot, mode, pull, revert, setCsvStatus, setDismissed } from './service';
+import { currentOoo, ensureSnapshot, mode, pull } from './service';
 import { DATA_DIR, store } from './store';
 
 const app = express();
@@ -52,57 +52,19 @@ app.post(
   }),
 );
 
-app.post(
-  '/api/linear/apply',
-  wrap(async (req, res) => {
-    const ids: unknown = req.body?.entryIds;
-    if (!Array.isArray(ids) || !ids.every((i) => typeof i === 'string')) return res.status(400).json({ error: 'entryIds must be a list of ledger ids.' });
-    res.json(await applyToLinear(ids));
-  }),
-);
-
-app.post(
-  '/api/ledger',
-  wrap((req, res) => {
-    res.json(accept(req.body));
-  }),
-);
-app.post(
-  '/api/ledger/:id/revert',
-  wrap((req, res) => {
-    res.json(revert(req.params.id));
-  }),
-);
-app.post(
-  '/api/ledger/:id/csv-status',
-  wrap((req, res) => {
-    res.json(setCsvStatus(req.params.id, !!req.body?.done));
-  }),
-);
-app.delete(
-  '/api/ledger/:id',
-  wrap((req, res) => {
-    discard(req.params.id);
-    res.json({ ok: true });
-  }),
-);
-
-app.post(
-  '/api/dismissed',
-  wrap((req, res) => {
-    if (typeof req.body?.id !== 'string') return res.status(400).json({ error: 'id is required.' });
-    setDismissed(req.body.id, req.body.dismissed !== false);
-    res.json({ ok: true });
-  }),
-);
-
 app.put(
   '/api/settings',
   wrap((req, res) => {
     const s = req.body as Partial<Settings>;
     const planner = store.planner();
-    const next: Settings = { ...planner.settings, ...s, thresholds: { ...planner.settings.thresholds, ...s.thresholds } };
+    const next: Settings = {
+      ...planner.settings,
+      ...s,
+      thresholds: { ...planner.settings.thresholds, ...s.thresholds },
+      statusWeights: { ...planner.settings.statusWeights, ...s.statusWeights },
+    };
     const t = next.thresholds;
+    const weight = (n: unknown) => typeof n === 'number' && n >= 0 && n <= 1;
     const valid =
       Array.isArray(next.workDays) &&
       next.workDays.length > 0 &&
@@ -111,8 +73,7 @@ app.put(
       Number.isInteger(next.lookbackCycles) &&
       next.lookbackCycles >= 1 &&
       next.lookbackCycles <= 6 &&
-      next.defaultUnplannedBuffer >= 0 &&
-      next.defaultUnplannedBuffer < 1 &&
+      Object.values(next.statusWeights).every(weight) &&
       t.under > 0 &&
       t.under < t.atRisk &&
       t.atRisk < t.over;

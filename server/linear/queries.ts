@@ -51,7 +51,7 @@ const ISSUES = /* GraphQL */ `
   query Issues($cycleIds: [ID!], $withHistory: Boolean!, $after: String) {
     issues(first: 50, after: $after, filter: { cycle: { id: { in: $cycleIds } } }) {
       nodes {
-        id identifier title url priority estimate createdAt updatedAt completedAt canceledAt
+        id identifier title url priority estimate dueDate createdAt updatedAt completedAt canceledAt
         state { type name }
         assignee { id name displayName email avatarUrl active }
         team { id }
@@ -85,7 +85,7 @@ const PROJECT_ISSUES = /* GraphQL */ `
   query ProjectIssues($projectIds: [ID!], $after: String) {
     issues(first: 50, after: $after, filter: { project: { id: { in: $projectIds } }, state: { type: { nin: ["completed", "canceled"] } } }) {
       nodes {
-        id identifier title url priority estimate createdAt updatedAt completedAt canceledAt
+        id identifier title url priority estimate dueDate createdAt updatedAt completedAt canceledAt
         state { type name }
         assignee { id name displayName email avatarUrl active }
         team { id }
@@ -98,20 +98,31 @@ const PROJECT_ISSUES = /* GraphQL */ `
   }
 `;
 
-const ISSUE = /* GraphQL */ `
-  query Issue($id: String!) {
-    issue(id: $id) { id identifier updatedAt estimate state { type } assignee { id } cycle { id } }
-  }
-`;
-
-const UPDATE = /* GraphQL */ `
-  mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
-    issueUpdate(id: $id, input: $input) { success issue { id updatedAt } }
+// Open, assigned work with no cycle and no project. Without a due date it can't be placed
+// in time, so Data hygiene flags it; with one, it counts as unscheduled load.
+const LOOSE_ISSUES = /* GraphQL */ `
+  query LooseIssues($teamIds: [ID!], $after: String) {
+    issues(
+      first: 50
+      after: $after
+      filter: { team: { id: { in: $teamIds } }, cycle: { null: true }, project: { null: true }, assignee: { null: false }, state: { type: { in: ["unstarted", "started"] } } }
+    ) {
+      nodes {
+        id identifier title url priority estimate dueDate createdAt updatedAt completedAt canceledAt
+        state { type name }
+        assignee { id name displayName email avatarUrl active }
+        team { id }
+        cycle { id }
+        project { id name }
+        labels(first: 10) { nodes { name } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 `;
 
 /** Every query, for the complexity budget test. */
-export const QUERIES = { ORG, TEAMS, TEAM_MEMBERS, CYCLES, ISSUES, PROJECTS, PROJECT_ISSUES, ISSUE, UPDATE };
+export const QUERIES = { ORG, TEAMS, TEAM_MEMBERS, CYCLES, ISSUES, PROJECTS, PROJECT_ISSUES, LOOSE_ISSUES };
 
 interface Conn<N> {
   nodes: N[];
@@ -161,27 +172,12 @@ export async function fetchSnapshot(apiKey: string, today: Day, lookbackCycles: 
     const chunk = projectIds.slice(i, i + 10);
     issues.push(...(await paginate<{ issues: Conn<RawIssue> }, RawIssue>(apiKey, PROJECT_ISSUES, { projectIds: chunk }, (d) => d.issues)));
   }
-  onProgress?.(`${issues.length} issues (cycle + project work)`);
+  const teamIds = teams.map((t) => t.id);
+  for (let i = 0; i < teamIds.length; i += 10) {
+    const chunk = teamIds.slice(i, i + 10);
+    issues.push(...(await paginate<{ issues: Conn<RawIssue> }, RawIssue>(apiKey, LOOSE_ISSUES, { teamIds: chunk }, (d) => d.issues)));
+  }
+  onProgress?.(`${issues.length} issues (cycle, project and other assigned work)`);
 
   return normalizeSnapshot({ organization, teams, cycles, issues, projects, fetchedAt: new Date().toISOString() });
-}
-
-export interface LiveIssue {
-  id: string;
-  identifier: string;
-  updatedAt: string;
-  estimate: number | null;
-  state: { type: string };
-  assignee: { id: string } | null;
-  cycle: { id: string } | null;
-}
-
-export async function fetchIssue(apiKey: string, id: string): Promise<LiveIssue | null> {
-  const data = await gql<{ issue: LiveIssue | null }>(apiKey, ISSUE, { id });
-  return data.issue;
-}
-
-export async function updateIssue(apiKey: string, id: string, input: { cycleId?: string; assigneeId?: string; estimate?: number }) {
-  const data = await gql<{ issueUpdate: { success: boolean; issue: { id: string; updatedAt: string } | null } }>(apiKey, UPDATE, { id, input });
-  return data.issueUpdate;
 }
