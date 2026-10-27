@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { periodBuckets, type Bucket, type PeriodUnit } from '../../../shared/calendar';
-import { isOpen, teamWindow, type CapacityModel, type LoadItem, type PersonWindow, type TeamWindow } from '../../../shared/capacity';
+import { addDays, countWorkingDays, dayInTimezone, formatShort, maxDay, overlap, periodBuckets, weekStart, type Bucket, type PeriodUnit } from '../../../shared/calendar';
+import { cycleName, isOpen, teamWindow, type CapacityModel, type LoadItem, type PersonWindow, type ReserveDetail, type TeamWindow } from '../../../shared/capacity';
 import type { VelocityMode } from '../../../shared/types';
 import { MultiSelect } from '../components/MultiSelect';
 import { Drawer } from '../components/Overlay';
@@ -19,6 +19,18 @@ export function CapacityHeatmap() {
   const h = filters.heatmap;
   const setH = (patch: Partial<HeatmapFilters>) => setFilters({ heatmap: { ...h, ...patch } });
   const [selection, setSelection] = useState<Selection | null>(null);
+  // Team groups start collapsed (team-level view); person and project filters are about
+  // individuals, so they expand every group while active.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const autoExpand = h.people.length > 0 || h.projects.length > 0;
+  const isExpanded = (teamId: string) => autoExpand || expanded.has(teamId);
+  const toggle = (teamId: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(teamId)) next.delete(teamId);
+      else next.add(teamId);
+      return next;
+    });
 
   const buckets = useMemo(() => periodBuckets(state.today, h.unit, h.size, h.count), [state.today, h.unit, h.size, h.count]);
   const projectSet = useMemo(() => new Set(h.projects), [h.projects]);
@@ -39,16 +51,19 @@ export function CapacityHeatmap() {
           .filter((p) => p?.active)
           .filter((p) => !peopleFilter.size || peopleFilter.has(p.id))
           .filter((p) => !projectSet.size || projectPeople.has(p.id));
+        const rows = members.map((person) => ({ person, cells: buckets.map((b) => model.personWindow(person.id, b.start, b.end)) }));
         return {
           team,
           teamCells: buckets.map((b) => teamWindow(model, team.id, b.start, b.end)),
-          rows: members.map((person) => ({ person, cells: buckets.map((b) => model.personWindow(person.id, b.start, b.end)) })),
+          rows,
+          overCount: rows.filter((r) => r.cells.some((c) => c.status === 'over')).length,
         };
       })
       .filter((g) => g.rows.length || (!h.people.length && !h.projects.length));
   }, [model, buckets, h.teams, h.people, projectSet, projectPeople, h.projects.length]);
 
   const filtersActive = h.projects.length + h.teams.length + h.people.length > 0;
+  const allExpanded = groups.every((g) => isExpanded(g.team.id));
 
   return (
     <TooltipProvider>
@@ -67,6 +82,28 @@ export function CapacityHeatmap() {
           </Empty>
         ) : (
           <section className="card">
+            <div className="hm-head">
+              <div className="segmented" role="group" aria-label="Rows">
+                <button
+                  className={!allExpanded ? 'seg-active' : ''}
+                  aria-pressed={!allExpanded}
+                  disabled={autoExpand}
+                  onClick={() => setExpanded(new Set())}
+                  data-testid="view-teams"
+                >
+                  Team view
+                </button>
+                <button
+                  className={allExpanded ? 'seg-active' : ''}
+                  aria-pressed={allExpanded}
+                  onClick={() => setExpanded(new Set(groups.map((g) => g.team.id)))}
+                  data-testid="view-people"
+                >
+                  Show people
+                </button>
+              </div>
+              {autoExpand && <span className="muted small">People are shown while a person or project filter is active.</span>}
+            </div>
             <div className="table-wrap">
               <table className="heatmap heatmap-v2" data-testid="heatmap">
                 <thead>
@@ -84,13 +121,28 @@ export function CapacityHeatmap() {
                   <tbody key={g.team.id} data-testid={`heatmap-team-${g.team.key}`}>
                     <tr className="hm-team-row">
                       <th className="hm-name">
-                        <span className="hm-team-name">{g.team.name}</span> <span className="muted small">team · {g.team.memberIds.length} people</span>
+                        <button
+                          className="hm-toggle"
+                          aria-expanded={isExpanded(g.team.id)}
+                          onClick={() => toggle(g.team.id)}
+                          disabled={autoExpand}
+                          data-testid={`toggle-${g.team.key}`}
+                        >
+                          <span aria-hidden className="hm-caret">
+                            {isExpanded(g.team.id) ? '▾' : '▸'}
+                          </span>
+                          <span className="hm-team-name">{g.team.name}</span>
+                        </button>
+                        <div className="muted small hm-team-meta">
+                          {g.rows.length} {g.rows.length === 1 ? 'person' : 'people'}
+                          {g.overCount > 0 && <span className="hm-over"> · {g.overCount} over in a period</span>}
+                        </div>
                       </th>
                       {g.teamCells.map((w, i) => (
                         <TeamCell key={buckets[i].id} w={w} bucket={buckets[i]} teamName={g.team.name} onOpen={() => setSelection({ kind: 'team', teamId: g.team.id, bucket: buckets[i] })} />
                       ))}
                     </tr>
-                    {g.rows.map(({ person, cells }) => (
+                    {isExpanded(g.team.id) && g.rows.map(({ person, cells }) => (
                       <tr key={person.id} data-testid="heatmap-person-row">
                         <th className="hm-name hm-person">
                           {person.name}
@@ -365,11 +417,53 @@ function Legend({ projectFilter }: { projectFilter: boolean }) {
 // ---------------------------------------------------------------------------
 // Drill-down
 
-const KIND_NOTE: Record<LoadItem['kind'], string> = {
-  planned: 'cycle work',
-  unplanned: 'added mid-cycle',
-  unscheduled: 'no cycle · spread to target',
-};
+/** Where an item's points are spread, and how many of those working days fall in the period. */
+function itemMath(model: CapacityModel, item: LoadItem, bucket: Bucket) {
+  const today = model.input.today;
+  const workDays = model.input.planner.settings.workDays;
+  const issue = model.issues.get(item.issueId)!;
+  const cycle = item.cycleId ? model.cycles.get(item.cycleId) : undefined;
+  const project = item.projectId ? model.projects.get(item.projectId) : undefined;
+  let start = today;
+  let end = today;
+  if (cycle) {
+    start = maxDay(cycle.startDate, today);
+    end = cycle.endDate;
+  } else if (project?.targetDate) {
+    end = item.overdue ? addDays(weekStart(today), 6) : project.targetDate;
+  }
+  const spreadDays = countWorkingDays(start, end, workDays);
+  const ov = overlap(bucket.start, bucket.end, start, end);
+  const inPeriod = ov ? countWorkingDays(ov[0], ov[1], workDays) : 0;
+  const team = model.teams.get(issue.teamId);
+  const addedDay = issue.addedToCycleAt ? dayInTimezone(issue.addedToCycleAt, team?.timezone ?? 'UTC') : null;
+  return { issue, cycle, project, spreadDays: Math.max(1, spreadDays), inPeriod: spreadDays ? inPeriod : 1, addedDay };
+}
+
+/** One-line note for the issue table. */
+function itemNote(model: CapacityModel, item: LoadItem, bucket: Bucket): string {
+  const m = itemMath(model, item, bucket);
+  const who = item.assigneeId ? '' : ' · unassigned';
+  if (item.kind === 'unplanned') return `added mid-cycle (${m.addedDay ? formatShort(m.addedDay) : '?'}, after ${formatShort(m.cycle!.startDate)} start)${who}`;
+  if (item.kind === 'unscheduled') {
+    return item.overdue ? `no cycle · target ${formatShort(m.project!.targetDate!)} passed → this week${who}` : `no cycle · spread to ${formatShort(m.project!.targetDate!)} target${who}`;
+  }
+  return `cycle work · ${m.spreadDays} working days left in cycle${who}`;
+}
+
+/** "5 pts over 19 working days, 10 in this period = 2.6 pts" */
+function spreadMath(model: CapacityModel, item: LoadItem, bucket: Bucket) {
+  const m = itemMath(model, item, bucket);
+  return `${pts(item.fullPoints)} pts${item.unestimated ? ' (unestimated → team median)' : ''} over ${m.spreadDays} working day${m.spreadDays === 1 ? '' : 's'}, ${m.inPeriod} in this period = ${pts(item.points)} pts`;
+}
+
+const PRIORITY_RANK = (p: number) => (p === 0 ? 5 : p);
+/** Issue ids ordered by priority (urgent first), then by points in the period. */
+function byPriority(model: CapacityModel, pointsById: Record<string, number>) {
+  return Object.keys(pointsById).sort(
+    (a, b) => PRIORITY_RANK(model.issues.get(a)!.priority) - PRIORITY_RANK(model.issues.get(b)!.priority) || pointsById[b] - pointsById[a],
+  );
+}
 
 function sumBy<K extends string>(items: LoadItem[], key: (i: LoadItem) => K) {
   const out = new Map<K, number>();
@@ -396,6 +490,93 @@ function Bars({ rows, max }: { rows: { label: string; value: number; cls: string
   );
 }
 
+/** "How this is calculated" for the three derived load categories, with this cell's numbers. */
+function CalcExplainer({ items, reserves, bucket }: { items: LoadItem[]; reserves: { label: string; teamId: string; d: ReserveDetail }[]; bucket: Bucket }) {
+  const { model } = usePlanner();
+  const unplanned = items.filter((i) => i.kind === 'unplanned');
+  const unscheduled = items.filter((i) => i.kind === 'unscheduled');
+  const total = (list: LoadItem[]) => pts(list.reduce((a, i) => a + i.points, 0));
+  const reserveTotal = reserves.reduce((a, r) => a + r.d.points, 0);
+  const id = (i: LoadItem) => model.issues.get(i.issueId)!.identifier;
+  return (
+    <div className="calc" data-testid="calc-explainer">
+      <details>
+        <summary>
+          <span className="swatch swatch-unplanned" aria-hidden /> How <strong>Added mid-cycle (unplanned)</strong> is calculated · {total(unplanned)} pts
+        </summary>
+        <p>
+          An issue counts as added mid-cycle when it entered its current cycle after the cycle's first day (from the issue's history in Linear, or its created date if there is no cycle change). Like
+          other cycle work, its points are spread evenly over the cycle's remaining working days, and this period gets its share.
+        </p>
+        {unplanned.length ? (
+          <ul>
+            {unplanned.map((i) => {
+              const m = itemMath(model, i, bucket);
+              return (
+                <li key={i.issueId}>
+                  <strong>{id(i)}</strong> added {m.addedDay ? formatShort(m.addedDay) : '?'}; {cycleName(m.cycle!, model.teams.get(m.cycle!.teamId))} started {formatShort(m.cycle!.startDate)} ·{' '}
+                  {spreadMath(model, i, bucket)}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="muted">No issues added mid-cycle fall in this period.</p>
+        )}
+      </details>
+      <details>
+        <summary>
+          <span className="swatch swatch-unscheduled" aria-hidden /> How <strong>Unscheduled project work</strong> is calculated · {total(unscheduled)} pts
+        </summary>
+        <p>
+          Open issues that belong to a project with a target date but aren't in any cycle. Each issue's points are spread evenly over the working days from today to the project's target date, and this
+          period gets its share. If the target date has already passed, the points land on the current week. Issues in projects without a target date aren't counted.
+        </p>
+        {unscheduled.length ? (
+          <ul>
+            {unscheduled.map((i) => {
+              const m = itemMath(model, i, bucket);
+              return (
+                <li key={i.issueId}>
+                  <strong>{id(i)}</strong> ({m.project?.name}, target {formatShort(m.project!.targetDate!)}
+                  {i.overdue ? ', passed' : ''}) · {spreadMath(model, i, bucket)}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="muted">No unscheduled project work falls in this period.</p>
+        )}
+      </details>
+      <details>
+        <summary>
+          <span className="swatch swatch-reserve" aria-hidden /> How <strong>Unplanned reserve</strong> is calculated · {pts(reserveTotal)} pts
+        </summary>
+        <p>
+          Future cycles hold back part of each person's capacity for work that will arrive mid-cycle: velocity × available days inside the team's future cycles (after OOO) × share of time on the team ×
+          the team's unplanned buffer. The current cycle has no reserve; its actual mid-cycle issues are counted instead.
+        </p>
+        {reserves.length ? (
+          <ul>
+            {reserves.map(({ label, teamId, d }) => (
+              <li key={`${label}-${teamId}`}>
+                <strong>{label}</strong>: {pts(d.velocity)} pts/day × {pts(d.days)} days × {pct(d.share)} × {pct(d.buffer)} buffer = {pts(d.points)} pts{' '}
+                <span className="muted">
+                  ({d.bufferSource === 'override' ? 'set in the planner' : 'default'}; {model.teamName(teamId)} measured {pct(d.measuredRatio)} unplanned over its last{' '}
+                  {model.input.planner.settings.lookbackCycles} cycles)
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">No reserve in this period: it's inside the active cycle, or the buffer is 0%.</p>
+        )}
+        <p className="muted">Change a team's buffer by accepting an "unplanned buffer" recommendation, or the default under Settings.</p>
+      </details>
+    </div>
+  );
+}
+
 function PersonCellDetail({ personId, bucket }: { personId: string; bucket: Bucket }) {
   const { model, state } = usePlanner();
   const w = model.personWindow(personId, bucket.start, bucket.end);
@@ -411,8 +592,9 @@ function PersonCellDetail({ personId, bucket }: { personId: string; bucket: Buck
   ];
   const max = Math.max(w.gross, w.load);
   const pointsById = Object.fromEntries(sumBy(w.items, (i) => i.issueId));
-  const notes = Object.fromEntries(w.items.map((i) => [i.issueId, `${KIND_NOTE[i.kind]}${i.overdue ? ' (target passed)' : ''}`]));
+  const notes = Object.fromEntries(w.items.map((i) => [i.issueId, itemNote(model, i, bucket)]));
   const ooo = w.oooEntries.map((e) => ({ ...e, entry: model.oooEntries.get(e.entryId)! }));
+  const reserves = Object.entries(w.reserveDetail).map(([teamId, d]) => ({ label: model.teamName(teamId), teamId, d }));
 
   return (
     <div className="stack drawer-body" data-testid="person-cell-detail">
@@ -453,6 +635,7 @@ function PersonCellDetail({ personId, bucket }: { personId: string; bucket: Buck
       <section>
         <h4>What's contributing to the load</h4>
         <Bars max={max} rows={categories} />
+        <CalcExplainer items={w.items} reserves={reserves} bucket={bucket} />
         <div className="grid-2 small">
           <div>
             <div className="muted">By team</div>
@@ -482,8 +665,8 @@ function PersonCellDetail({ personId, bucket }: { personId: string; bucket: Buck
       </section>
       <section>
         <h4>Issues in this period ({Object.keys(pointsById).length})</h4>
-        <IssueTable issueIds={Object.keys(pointsById)} points={pointsById} notes={notes} showAssignee={false} showState={false} showPriority={false} />
-        <p className="muted small">"In range" is the share of each issue's points that falls in this period: cycle work is spread over the cycle's working days, project work without a cycle up to the target date.</p>
+        <IssueTable issueIds={byPriority(model, pointsById)} points={pointsById} notes={notes} showAssignee={false} showState={false} />
+        <p className="muted small">Sorted by priority. "In range" is the share of each issue's points that falls in this period.</p>
       </section>
     </div>
   );
@@ -494,7 +677,10 @@ function TeamCellDetail({ teamId, bucket }: { teamId: string; bucket: Bucket }) 
   const w = teamWindow(model, teamId, bucket.start, bucket.end);
   const max = Math.max(w.fullGross, w.load);
   const pointsById = Object.fromEntries(sumBy(w.items, (i) => i.issueId));
-  const notes = Object.fromEntries(w.items.map((i) => [i.issueId, `${KIND_NOTE[i.kind]}${i.assigneeId ? '' : ' · unassigned'}`]));
+  const notes = Object.fromEntries(w.items.map((i) => [i.issueId, itemNote(model, i, bucket)]));
+  const reserves = w.members
+    .map((m) => ({ label: model.people.get(m.personId)?.name ?? 'Unknown', teamId, d: model.personWindow(m.personId, bucket.start, bucket.end).reserveDetail[teamId] }))
+    .filter((r): r is { label: string; teamId: string; d: ReserveDetail } => !!r.d);
   return (
     <div className="stack drawer-body" data-testid="team-cell-detail">
       <div className="drawer-summary">
@@ -519,12 +705,14 @@ function TeamCellDetail({ teamId, bucket }: { teamId: string; bucket: Bucket }) 
           max={max}
           rows={[
             { label: 'Planned cycle work', value: w.planned, cls: 'swatch-planned' },
-            { label: 'Added mid-cycle', value: w.unplanned, cls: 'swatch-unplanned' },
+            { label: 'Added mid-cycle (unplanned)', value: w.unplanned, cls: 'swatch-unplanned' },
             { label: 'Unscheduled project work', value: w.unscheduled, cls: 'swatch-unscheduled' },
             { label: 'Unplanned reserve', value: w.reserve, cls: 'swatch-reserve' },
             { label: 'Unassigned', value: w.unassigned, cls: 'swatch-unassigned' },
           ]}
         />
+        <CalcExplainer items={w.items.filter((i) => i.assigneeId)} reserves={reserves} bucket={bucket} />
+        {w.unassigned > 0.05 && <p className="small muted">Unassigned issues count toward the team, whatever their kind; they're listed below with "unassigned".</p>}
       </section>
       <section>
         <h4>Members</h4>
@@ -563,7 +751,8 @@ function TeamCellDetail({ teamId, bucket }: { teamId: string; bucket: Bucket }) 
       </section>
       <section>
         <h4>Team issues in this period ({Object.keys(pointsById).length})</h4>
-        <IssueTable issueIds={Object.keys(pointsById)} points={pointsById} notes={notes} showState={false} showPriority={false} />
+        <IssueTable issueIds={byPriority(model, pointsById)} points={pointsById} notes={notes} showState={false} />
+        <p className="muted small">Sorted by priority. "In range" is the share of each issue's points that falls in this period.</p>
       </section>
     </div>
   );

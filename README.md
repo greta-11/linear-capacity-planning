@@ -132,7 +132,10 @@ Expanding a row shows the factor table with each factor's contribution, the peop
 
 - **Columns** are periods of *x* **weeks, months or quarters**: for example 2 weeks × 6, or 1 quarter × 4. Weeks start on Monday, months on the 1st, quarters in Jan/Apr/Jul/Oct, and the first period starts today.
 - **Cells** show load as a % of capacity, tinted by status. A ring marks periods with OOO.
-- **Rows are grouped by team.**
+- **Rows are grouped by team**, and groups start collapsed, so the default is a team-level view.
+  - Expand a team with its ▸ toggle, or use **Show people** / **Team view** to expand or collapse every group.
+  - A collapsed team still says how many of its people are over capacity in some period.
+  - A person or project filter expands every group while it's active.
   - Each team's summary row compares the team's work with its members' time on that team.
   - Person rows show the person's whole load across all teams and projects.
   - People on several teams appear under each team with an "also on …" chip.
@@ -151,16 +154,17 @@ Expanding a row shows the factor table with each factor's contribution, the peop
     - the capacity math (velocity, working days, OOO rows from the CSV)
     - what makes up the load (planned cycle work, work added mid-cycle, unscheduled project work, unplanned reserve)
     - the load broken down by team and by project
-    - every issue in the period, with the share of its points that falls in that period
+    - every issue in the period, sorted by priority, with the share of its points that falls in that period
+    - **How this is calculated** notes for *Added mid-cycle*, *Unscheduled project work* and *Unplanned reserve*, using this cell's numbers, e.g. "5 pts over 19 working days, 10 in this period = 2.6 pts" or "0.63 pts/day × 10 days × 100% × 10% buffer = 0.6 pts"
   - **Team cell:**
     - where the capacity went (members' full time − absences − time on other teams)
     - what the team is asked to carry
     - its members
     - its issues
 
-### Recommendations
+### Recommendations [WIP]
 
-Recommendations have their own cycle-range and team filters.
+This tab is a work in progress. Recommendations have their own cycle-range and team filters.
 
 
 Each recommendation names its destination and has an **evidence panel** with:

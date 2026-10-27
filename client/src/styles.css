@@ -1801,3 +1801,105 @@ ul.plain li {
 .nowrap {
   white-space: nowrap;
 }
+
+/* ---------- heat map: collapsible teams, calculation notes ---------- */
+.hm-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.segmented button {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 0;
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.segmented button + button {
+  border-left: 1px solid var(--border-strong);
+}
+.segmented .seg-active {
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 500;
+}
+.segmented button:disabled {
+  cursor: default;
+}
+.hm-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.hm-toggle:disabled {
+  cursor: default;
+}
+.hm-toggle:hover:not(:disabled) .hm-team-name,
+.hm-toggle:focus-visible .hm-team-name {
+  color: var(--accent);
+}
+.hm-caret {
+  width: 12px;
+  color: var(--text-2);
+  font-size: 11px;
+}
+.hm-team-meta {
+  padding-left: 18px;
+}
+.hm-over {
+  color: var(--critical-ink);
+}
+.heatmap-v2 .hm-person {
+  padding-left: 26px;
+}
+.calc {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 12px;
+  font-size: 12px;
+}
+.calc details {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--bg);
+}
+.calc summary {
+  cursor: pointer;
+  color: var(--text-2);
+}
+.calc summary strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.calc summary .swatch {
+  vertical-align: -1px;
+  margin-right: 2px;
+}
+.calc p {
+  margin: 6px 0;
+}
+.calc ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.calc li {
+  padding: 1px 0;
+}
