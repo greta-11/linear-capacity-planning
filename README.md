@@ -231,6 +231,10 @@ Everything is in **estimate points**. Teams with estimates turned off count each
 
 ---
 
+## Linear API limits
+
+Linear caps every GraphQL query at **10,000 complexity points**, separately from the hourly budget (3,000,000 points for a personal API key). Complexity is scored from the page sizes a query *requests*, not the data it returns, so a small workspace can still hit the cap. The planner keeps each query to one large page and fetches nested lists, such as each team's members, in their own paginated queries. The largest query is about 2,600 points. `npm test` estimates every query and fails if one goes over 5,000.
+
 ## Commands
 
 | Command | What it does |

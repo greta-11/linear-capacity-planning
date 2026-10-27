@@ -1,9 +1,13 @@
 import { addDays } from '../../shared/calendar';
 import type { Day, Snapshot } from '../../shared/types';
 import { gql, paginate } from './client';
-import { normalizeSnapshot, type RawCycle, type RawIssue, type RawProject, type RawTeam } from './normalize';
+import { normalizeSnapshot, type RawCycle, type RawIssue, type RawProject, type RawTeam, type RawUser } from './normalize';
 
-// Page sizes are kept small enough to stay well under Linear's query complexity limit.
+// Linear caps every query at 10,000 complexity points, scored from the requested page
+// sizes (not the data returned): 0.1 per field, 1 per object, and each connection
+// multiplies its children by `first` (default 50). Nested connections multiply, so
+// each query keeps at most one large page and fetches anything else in its own query.
+// tests/linear-queries.test.ts estimates every query below and fails past 5,000.
 
 const ORG = /* GraphQL */ `
   query Org {
@@ -12,14 +16,24 @@ const ORG = /* GraphQL */ `
   }
 `;
 
+// Teams without members: nesting members inside the teams page multiplied the two page
+// sizes (50 × 250) and exceeded the limit. Members are fetched per team below.
 const TEAMS = /* GraphQL */ `
   query Teams($after: String) {
     teams(first: 50, after: $after) {
-      nodes {
-        id key name cyclesEnabled cycleDuration issueEstimationType timezone
-        members(first: 250) { nodes { id name displayName email avatarUrl active } }
-      }
+      nodes { id key name cyclesEnabled cycleDuration issueEstimationType timezone }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+const TEAM_MEMBERS = /* GraphQL */ `
+  query TeamMembers($teamId: String!, $after: String) {
+    team(id: $teamId) {
+      members(first: 100, after: $after) {
+        nodes { id name displayName email avatarUrl active }
+        pageInfo { hasNextPage endCursor }
+      }
     }
   }
 `;
@@ -96,6 +110,9 @@ const UPDATE = /* GraphQL */ `
   }
 `;
 
+/** Every query, for the complexity budget test. */
+export const QUERIES = { ORG, TEAMS, TEAM_MEMBERS, CYCLES, ISSUES, PROJECTS, PROJECT_ISSUES, ISSUE, UPDATE };
+
 interface Conn<N> {
   nodes: N[];
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -108,8 +125,13 @@ export async function fetchViewer(apiKey: string) {
 /** Pulls teams, members, recent + upcoming cycles and their issues. */
 export async function fetchSnapshot(apiKey: string, today: Day, lookbackCycles: number, onProgress?: (msg: string) => void): Promise<Snapshot> {
   const { organization } = await fetchViewer(apiKey);
-  const teams = await paginate<{ teams: Conn<RawTeam> }, RawTeam>(apiKey, TEAMS, {}, (d) => d.teams);
-  onProgress?.(`${teams.length} teams`);
+  const teamList = await paginate<{ teams: Conn<Omit<RawTeam, 'members'>> }, Omit<RawTeam, 'members'>>(apiKey, TEAMS, {}, (d) => d.teams);
+  const teams: RawTeam[] = [];
+  for (const team of teamList) {
+    const members = await paginate<{ team: { members: Conn<RawUser> } }, RawUser>(apiKey, TEAM_MEMBERS, { teamId: team.id }, (d) => d.team.members);
+    teams.push({ ...team, members: { nodes: members } });
+  }
+  onProgress?.(`${teams.length} teams, ${new Set(teams.flatMap((t) => t.members.nodes.map((m) => m.id))).size} members`);
 
   const cycles: RawCycle[] = [];
   for (const team of teams.filter((t) => t.cyclesEnabled)) {
