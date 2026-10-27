@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Change, LedgerEntry, OooDataset, OooEntry, PlannerState, Recommendation, Settings, Snapshot, SyncRecord } from '../../shared/types';
+import type { OooDataset, OooEntry, PlannerState, Settings, Snapshot, SyncRecord } from '../../shared/types';
 
 export interface AppState {
   mode: 'linear' | 'demo';
@@ -44,23 +44,6 @@ function useInvalidating<TVars, TResult>(fn: (vars: TVars) => Promise<TResult>) 
 }
 
 export const usePull = () => useInvalidating(() => request<{ ok: boolean; record: SyncRecord }>('POST', '/api/linear/pull'));
-export const useApply = () =>
-  useInvalidating((entryIds: string[]) => request<{ entries: LedgerEntry[]; pull: SyncRecord }>('POST', '/api/linear/apply', { entryIds }));
-export const useAccept = () =>
-  useInvalidating((input: { rec: Recommendation; changes: Change[] }) =>
-    request<LedgerEntry>('POST', '/api/ledger', {
-      recommendationId: input.rec.id,
-      group: input.rec.group,
-      rule: input.rec.rule,
-      title: input.rec.title,
-      reason: `${input.rec.evidence.metric.label}: ${input.rec.evidence.metric.value}`,
-      changes: input.changes,
-    }),
-  );
-export const useRevert = () => useInvalidating((id: string) => request<LedgerEntry>('POST', `/api/ledger/${id}/revert`));
-export const useCsvStatus = () => useInvalidating((v: { id: string; done: boolean }) => request<LedgerEntry>('POST', `/api/ledger/${v.id}/csv-status`, { done: v.done }));
-export const useDiscard = () => useInvalidating((id: string) => request<{ ok: true }>('DELETE', `/api/ledger/${id}`));
-export const useDismiss = () => useInvalidating((v: { id: string; dismissed: boolean }) => request<{ ok: true }>('POST', '/api/dismissed', v));
 export const useSaveSettings = () => useInvalidating((s: Settings) => request<Settings>('PUT', '/api/settings', s));
 export const useResetSettings = () => useInvalidating(() => request<Settings>('POST', '/api/settings/reset'));
 export const useImportOoo = () => useInvalidating((v: { fileName: string; csv: string }) => request<OooDataset>('POST', '/api/ooo', v));

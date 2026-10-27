@@ -12,7 +12,6 @@ export function SettingsPanel() {
     <div className="stack">
       <LinearCard />
       <SettingsCard />
-      <OverridesCard />
     </div>
   );
 }
@@ -28,7 +27,7 @@ export function LinearCard() {
       {state.mode === 'demo' ? (
         <div className="notice">
           <p>
-            <strong>Demo mode.</strong> No LINEAR_API_KEY is set, so the planner uses a generated workspace. "Apply to Linear" writes to <code>data/demo-workspace.json</code>.
+            <strong>Demo mode.</strong> No LINEAR_API_KEY is set, so the planner uses a generated workspace stored in <code>data/demo-workspace.json</code>.
           </p>
           <p className="small">To connect your workspace, create a personal API key (Linear → Settings → Security & access → Personal API keys), then in the project folder:</p>
           <pre className="code">{`cp .env.example .env
@@ -70,7 +69,7 @@ npm run dev              # restart the app`}</pre>
             <tr key={r.at}>
               <td>{dateTime(r.at)}</td>
               <td>{r.ok ? <span className="ok-text">✓ ok</span> : <span className="error">✗ failed</span>}</td>
-              <td className="small">{r.ok ? `${r.counts?.issues} issues${r.staleEntries ? ` · ${r.staleEntries} accepted change(s) out of date` : ''}` : r.error}</td>
+              <td className="small">{r.ok ? `${r.counts?.issues} issues` : r.error}</td>
             </tr>
           ))}
         </tbody>
@@ -242,10 +241,29 @@ export function SettingsCard() {
           <span>Velocity lookback (completed cycles)</span>
           <input type="number" min={1} max={6} value={draft.lookbackCycles} onChange={(e) => set({ lookbackCycles: Number(e.target.value) })} />
         </label>
-        <label className="field">
-          <span>Default unplanned reserve (%)</span>
-          <input type="number" min={0} max={90} value={Math.round(draft.defaultUnplannedBuffer * 100)} onChange={(e) => set({ defaultUnplannedBuffer: Number(e.target.value) / 100 })} />
-        </label>
+        <fieldset>
+          <legend>Remaining work by status (% of the estimate still to do)</legend>
+          {(
+            [
+              ['notStarted', 'Triage / Backlog / Todo'],
+              ['inProgress', 'In Progress (other started states)'],
+              ['inReview', 'In Review (started states named "review")'],
+            ] as const
+          ).map(([k, label]) => (
+            <label key={k} className="field">
+              <span>{label}</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={5}
+                value={Math.round(draft.statusWeights[k] * 100)}
+                onChange={(e) => set({ statusWeights: { ...draft.statusWeights, [k]: Math.min(100, Math.max(0, Number(e.target.value))) / 100 } })}
+                data-testid={`weight-${k}`}
+              />
+            </label>
+          ))}
+        </fieldset>
         <label className="field">
           <span>Under below (%)</span>
           <input type="number" value={Math.round(draft.thresholds.under * 100)} onChange={(e) => setT('under', Number(e.target.value) / 100)} />
@@ -268,38 +286,6 @@ export function SettingsCard() {
         </button>
         {save.error && <span className="error small">{(save.error as Error).message}</span>}
       </div>
-    </section>
-  );
-}
-
-export function OverridesCard() {
-  const { state, model } = usePlanner();
-  const p = state.planner;
-  const rows = [
-    ...Object.entries(p.allocations).map(([id, s]) => ({
-      what: `${model.people.get(id)?.name ?? id} · time split`,
-      value: Object.entries(s).map(([t, v]) => `${model.teams.get(t)?.key ?? t} ${pct(v)}`).join(' / '),
-    })),
-    ...Object.entries(p.velocityOverrides).map(([id, v]) => ({ what: `${model.people.get(id)?.name ?? id} · velocity`, value: `${v} pts/day` })),
-    ...Object.entries(p.unplannedBuffers).map(([id, v]) => ({ what: `${model.teamName(id)} · unplanned reserve`, value: pct(v) })),
-  ];
-  return (
-    <section className="card">
-      <h2>Planner overrides in effect</h2>
-      {rows.length ? (
-        <table className="table table-compact">
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.what}>
-                <td>{r.what}</td>
-                <td>{r.value}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <p className="small muted">None. Accept a "Keep in planner" recommendation under Adjustments to add one; revert it there too.</p>
-      )}
     </section>
   );
 }

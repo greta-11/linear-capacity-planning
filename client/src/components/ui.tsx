@@ -2,9 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { createPortal } from 'react-dom';
 import type { Status } from '../../../shared/capacity';
 import { cycleName } from '../../../shared/capacity';
-import { PRIORITY_LABEL } from '../../../shared/recommendations';
 import { usePlanner } from '../context';
 import { pct, pts, STATUS_LABEL } from '../format';
+
+export const PRIORITY_LABEL = ['No priority', 'Urgent', 'High', 'Medium', 'Low'];
 
 export const STATUS_ICON: Record<Status, string> = { none: '·', under: '○', healthy: '✓', 'at-risk': '!', over: '▲' };
 
@@ -84,6 +85,7 @@ export function IssueTable({
   showProject = true,
   showState = true,
   showPriority = true,
+  notesInline = false,
 }: {
   issueIds: string[];
   highlight?: Set<string>;
@@ -94,6 +96,8 @@ export function IssueTable({
   showProject?: boolean;
   showState?: boolean;
   showPriority?: boolean;
+  /** Show notes as a second line under the title instead of their own column (for narrow panels). */
+  notesInline?: boolean;
 }) {
   const { model } = usePlanner();
   if (!issueIds.length) return <p className="muted small">No issues.</p>;
@@ -111,7 +115,7 @@ export function IssueTable({
             {showPriority && <th>Priority</th>}
             <th className="num">Estimate</th>
             {points && <th className="num">In range</th>}
-            {notes && <th>Note</th>}
+            {notes && !notesInline && <th>Note</th>}
           </tr>
         </thead>
         <tbody>
@@ -125,9 +129,10 @@ export function IssueTable({
                 <td>
                   <IssueLink id={id} />
                 </td>
-                <td className="truncate" title={issue.title}>
+                <td className={notesInline ? 'title-cell' : 'truncate'} title={issue.title}>
                   {issue.title}
                   {unplanned && <span className="tag tag-unplanned">unplanned</span>}
+                  {notesInline && notes?.[id] && <div className="muted small issue-note">{notes[id]}</div>}
                 </td>
                 {showAssignee && (
                   <td>
@@ -144,7 +149,7 @@ export function IssueTable({
                 {showPriority && <td>{PRIORITY_LABEL[issue.priority] ?? '—'}</td>}
                 <td className="num">{unestimated ? <span className="muted" title="Unestimated: counted at the team median">~{pts(p)}</span> : pts(p)}</td>
                 {points && <td className="num">{points[id] != null ? pts(points[id]) : '—'}</td>}
-                {notes && <td className="small">{notes[id] ?? ''}</td>}
+                {notes && !notesInline && <td className="small">{notes[id] ?? ''}</td>}
               </tr>
             );
           })}

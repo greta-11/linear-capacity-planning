@@ -1,5 +1,5 @@
 import { addDays, countWorkingDays, maxDay, weekStart } from '../../shared/calendar';
-import type { Cycle, Day, Issue, Person, Project, Snapshot, StateType, Team } from '../../shared/types';
+import { SNAPSHOT_VERSION, type Cycle, type Day, type Issue, type Person, type Project, type Snapshot, type StateType, type Team } from '../../shared/types';
 
 // Deterministic demo workspace, generated relative to `today` so there is always
 // an active cycle. It is built to show each kind of overcommitment:
@@ -163,7 +163,17 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
   const makeIssue = (
     teamId: string,
     cycle: Cycle | null,
-    opts: { assigneeId: string | null; estimate: number | null; state: StateType; unplanned?: boolean; priority?: number; title?: string; projectId?: string | null },
+    opts: {
+      assigneeId: string | null;
+      estimate: number | null;
+      state: StateType;
+      unplanned?: boolean;
+      priority?: number;
+      title?: string;
+      projectId?: string | null;
+      dueDate?: Day | null;
+      stateName?: string;
+    },
   ) => {
     const team = TEAMS.find((t) => t.id === teamId)!;
     counters[teamId] = (counters[teamId] ?? 100) + 1;
@@ -189,7 +199,8 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
       estimate: opts.estimate,
       priority: opts.priority ?? (opts.unplanned ? 2 : 1 + Math.floor(rand() * 4)),
       stateType: opts.state,
-      stateName: stateName[opts.state],
+      stateName: opts.stateName ?? stateName[opts.state],
+      dueDate: opts.dueDate ?? null,
       projectId,
       projectName: projectId ? projectById.get(projectId)!.name : null,
       labels: opts.unplanned ? ['Bug'] : ['Feature'],
@@ -240,7 +251,9 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
         fill(target, (size) => {
           const state: StateType = isActive && first ? 'started' : 'unstarted';
           first = false;
-          makeIssue(team.id, cycle, { assigneeId: p.id, estimate: size, state, projectId: projectFor(p.id, team.id, cycle) });
+          // Some work in progress is already in review (counts at the review weight).
+          const stateName = state === 'started' && ['u-chen', 'u-eli', 'u-jo'].includes(p.id) ? 'In Review' : undefined;
+          makeIssue(team.id, cycle, { assigneeId: p.id, estimate: size, state, stateName, projectId: projectFor(p.id, team.id, cycle) });
         });
         if (isActive) {
           // Completed work earlier in the active cycle (doesn't count toward remaining load).
@@ -297,7 +310,21 @@ export function demoSnapshot(today: Day, fetchedAt = new Date().toISOString()): 
   const pltLate = cycles.find((c) => c.teamId === 'team-plt' && c.startDate > projectById.get('prj-api')!.targetDate!)!;
   makeIssue('team-plt', pltLate, { assigneeId: 'u-chen', estimate: 5, state: 'unstarted', priority: 2, title: 'API v2: rate-limit tiers', projectId: 'prj-api' });
 
-  return { source: 'demo', organizationName: 'Acme (demo)', urlKey: 'acme', fetchedAt, demoSeedDay: today, teams, people, cycles, issues, projects };
+  // Assigned work outside any cycle or project. With a due date it counts as unscheduled
+  // load; without one the planner can't place it, so Data hygiene flags it.
+  const loose: [string, string, number | null, StateType, string, Day | null][] = [
+    ['team-web', 'u-farah', 2, 'unstarted', 'Publish accessibility statement', addDays(weekStart(today), 7 * 3 + 4)],
+    ['team-mob', 'u-ivan', 3, 'unstarted', 'App Store screenshots refresh', addDays(weekStart(today), 7 * 2 + 4)],
+    ['team-plt', 'u-ben', 3, 'unstarted', 'Investigate flaky deploys', null],
+    ['team-mob', 'u-hana', null, 'unstarted', 'Refactor settings screen', null],
+    ['team-web', 'u-eli', 2, 'started', 'Clean up stale feature flags', null],
+    ['team-mob', 'u-kai', null, 'unstarted', 'Spike: new analytics SDK', null],
+  ];
+  for (const [teamId, assigneeId, estimate, state, title, dueDate] of loose) {
+    makeIssue(teamId, null, { assigneeId, estimate, state, priority: 3, title, projectId: null, dueDate });
+  }
+
+  return { version: SNAPSHOT_VERSION, source: 'demo', organizationName: 'Acme (demo)', urlKey: 'acme', fetchedAt, demoSeedDay: today, teams, people, cycles, issues, projects };
 }
 
 /** OOO CSV for the demo workspace, relative to `today`. Also written to samples/ooo-sample.csv. */

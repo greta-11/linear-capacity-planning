@@ -29,6 +29,7 @@ export function issue(partial: Partial<Issue> & Pick<Issue, 'teamId' | 'cycleId'
     priority: 3,
     stateType: 'unstarted',
     stateName: 'Todo',
+    dueDate: null,
     projectId: null,
     projectName: null,
     labels: [],

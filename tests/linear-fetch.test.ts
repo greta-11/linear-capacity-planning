@@ -32,6 +32,8 @@ function fakeLinear() {
           return { team: { members: page([user('b'), user('d')]) } };
         case 'Projects':
           return { projects: page([]) };
+        case 'LooseIssues':
+          return { issues: page([]) };
         default:
           throw new Error(`unexpected operation ${op}`);
       }

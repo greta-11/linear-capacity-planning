@@ -1,155 +1,186 @@
 import { describe, expect, it } from 'vitest';
-import { breakdown, buildModel, classify, summarizePeople, summarizeTeam, DEFAULT_SETTINGS } from '../shared/capacity';
+import { periodBuckets } from '../shared/calendar';
+import { buildModel, classify, DEFAULT_SETTINGS, teamWindow } from '../shared/capacity';
+import type { Project, VelocityMode } from '../shared/types';
 import { fixture, issue, ooo, planner, TODAY } from './fixtures';
 
 const range = { from: TODAY, to: '2026-11-29' };
+const build = (snap = fixture(), opts: { bufferPct?: number; velocityMode?: VelocityMode; ooo?: ReturnType<typeof ooo> } = {}) =>
+  buildModel({ snapshot: snap, ooo: opts.ooo ?? null, planner: planner(), range, today: TODAY, bufferPct: opts.bufferPct ?? 0, velocityMode: opts.velocityMode });
+const project = (patch: Partial<Project> = {}): Project => ({
+  id: 'P',
+  name: 'Project P',
+  url: 'https://linear.app/x/project/p',
+  targetDate: '2026-11-13',
+  startDate: null,
+  statusType: 'started',
+  statusName: 'In Progress',
+  health: null,
+  progress: 0,
+  leadId: null,
+  teamIds: ['T'],
+  ...patch,
+});
 
 describe('velocity', () => {
-  it('measures points per available day from completed cycles', () => {
-    const m = buildModel({ snapshot: fixture(), ooo: null, planner: planner(), range, today: TODAY });
-    const v = m.velocity.get('A')!;
-    expect(v.source).toBe('history');
-    expect(v.points).toBe(20);
-    expect(v.availableDays).toBe(20);
-    expect(v.value).toBeCloseTo(1);
-    expect(v.cycles.map((c) => c.cycleId)).toEqual(['c1', 'c2']);
-  });
-
-  it('excludes past absences from the denominator', () => {
-    const m = buildModel({ snapshot: fixture(), ooo: ooo([{ start: '2026-10-08', end: '2026-10-09' }]), planner: planner(), range, today: TODAY });
-    const v = m.velocity.get('A')!;
+  it('measures points per available day from completed cycles, excluding past OOO', () => {
+    expect(build().velocity.get('A')!).toMatchObject({ source: 'history', points: 20, availableDays: 20, value: 1 });
+    const v = build(fixture(), { ooo: ooo([{ start: '2026-10-08', end: '2026-10-09' }]) }).velocity.get('A')!;
     expect(v.oooDays).toBe(2);
     expect(v.value).toBeCloseTo(20 / 18);
   });
 
-  it('falls back to team average, and honours overrides', () => {
-    const m = buildModel({ snapshot: fixture(), ooo: null, planner: planner({ velocityOverrides: {} }), range, today: TODAY });
-    expect(m.velocity.get('B')!.source).toBe('team-average');
-    expect(m.velocity.get('B')!.value).toBeCloseTo(1);
-    const o = buildModel({ snapshot: fixture(), ooo: null, planner: planner({ velocityOverrides: { B: 0.5 } }), range, today: TODAY });
-    expect(o.velocity.get('B')!.source).toBe('override');
-    expect(o.velocity.get('B')!.value).toBe(0.5);
+  it('falls back to the team average of members with a velocity above zero, and says so', () => {
+    // C has completed issues worth 0 points: no usable velocity, and not part of the average.
+    const snap = fixture([0, 0, 0].map(() => issue({ teamId: 'T', cycleId: 'c2', assigneeId: 'C', estimate: 0, stateType: 'completed' })));
+    snap.people.push({ id: 'C', name: 'Cy C', displayName: 'Cy', email: 'cy@x.dev', avatarUrl: null, active: true, teamIds: ['T'] });
+    snap.teams[0].memberIds.push('C');
+    const m = build(snap);
+    for (const id of ['B', 'C']) {
+      const v = m.velocity.get(id)!;
+      expect(v.source).toBe('team-average');
+      expect(v.value).toBeCloseTo(1); // A's 1.0 only; C's zero is excluded
+      expect(v.fallbackNote).toMatch(/Not enough history .* using Team T team average, 5 pts\/wk/);
+    }
+    expect(m.velocity.get('A')!.fallbackNote).toBeNull();
+  });
+
+  it('supports team-average and manual points-per-week modes', () => {
+    expect(build(fixture(), { velocityMode: { kind: 'team-average' } }).velocity.get('B')!).toMatchObject({ source: 'team-average', value: 1 });
+    const m = build(fixture(), { velocityMode: { kind: 'manual', pointsPerWeek: 10 } });
+    expect(m.velocity.get('A')!).toMatchObject({ source: 'manual', value: 2 });
+    expect(m.personWindow('A', '2026-11-02', '2026-11-29').baseline).toBe(2 * m.personWindow('A', '2026-11-02', '2026-11-15').baseline);
   });
 });
 
-describe('absences', () => {
+describe('capacity formula', () => {
+  it('computes baseline → available (OOO share) → plannable (buffer) → utilization, in that order', () => {
+    const snap = fixture([issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 6 })]);
+    const m = build(snap, { bufferPct: 0.2, ooo: ooo([{ start: '2026-11-02', end: '2026-11-03' }]) });
+    const w = m.personWindow('A', '2026-11-02', '2026-11-15');
+    expect(w.baseline).toBe(10); // 1 pt/day × 10 working days
+    expect(w.oooShare).toBeCloseTo(0.2); // 2 of 10 days
+    expect(w.available).toBeCloseTo(8); // 10 × (1 − 0.2)
+    expect(w.plannable).toBeCloseTo(6.4); // 8 × (1 − 0.2)
+    expect(w.load).toBeCloseTo(6);
+    expect(w.utilization).toBeCloseTo(6 / 6.4);
+  });
+
   it('counts half days and caps overlapping company holidays at one day', () => {
     const data = ooo([
       { start: '2026-11-03', end: '2026-11-04', fraction: 0.5 },
       { email: '*', personId: null, start: '2026-11-04', end: '2026-11-04', type: 'holiday' },
     ]);
-    const m = buildModel({ snapshot: fixture(), ooo: data, planner: planner(), range, today: TODAY });
-    const w = m.personWindow('A', '2026-11-02', '2026-11-08');
-    expect(w.workingDays).toBe(5);
-    expect(w.oooDays).toBe(1.5);
-    expect(w.capacity).toBeCloseTo(3.5);
-    expect(w.oooEntries.map((e) => e.entryId).sort()).toEqual(['o1', 'o2']);
-    // The company holiday applies to Bob too.
+    const m = build(fixture(), { ooo: data });
+    expect(m.personWindow('A', '2026-11-02', '2026-11-08').oooDays).toBe(1.5);
     expect(m.personWindow('B', '2026-11-02', '2026-11-08').oooDays).toBe(1);
   });
 
-  it('ignores weekend absences and absences outside the window', () => {
-    const data = ooo([{ start: '2026-11-07', end: '2026-11-08' }, { start: '2026-12-01', end: '2026-12-05' }]);
-    const m = buildModel({ snapshot: fixture(), ooo: data, planner: planner(), range, today: TODAY });
-    expect(m.personWindow('A', '2026-11-02', '2026-11-15').oooDays).toBe(0);
-  });
-});
-
-describe('load', () => {
-  it('spreads open issues over the cycle and splits planned from unplanned', () => {
-    const snap = fixture([
-      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 10, addedToCycleAt: '2026-11-02T09:00:00Z' }),
-      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 2, addedToCycleAt: '2026-11-03T09:00:00Z' }),
-      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 8, stateType: 'completed' }),
-      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 8, stateType: 'canceled' }),
-    ]);
-    const m = buildModel({ snapshot: snap, ooo: null, planner: planner({ settings: { ...DEFAULT_SETTINGS, defaultUnplannedBuffer: 0 } }), range, today: TODAY });
-    const week1 = m.personWindow('A', '2026-11-02', '2026-11-08');
-    expect(week1.loadByTeam.T.planned).toBeCloseTo(5);
-    expect(week1.loadByTeam.T.unplanned).toBeCloseTo(1);
-    expect(week1.items).toHaveLength(2);
-  });
-
-  it('reserves the unplanned buffer on future cycles only', () => {
-    const m = buildModel({ snapshot: fixture(), ooo: null, planner: planner({ unplannedBuffers: { T: 0.2 } }), range, today: TODAY });
-    expect(m.personWindow('A', '2026-11-02', '2026-11-15').loadByTeam.T.reserve).toBe(0);
-    expect(m.personWindow('A', '2026-11-16', '2026-11-29').loadByTeam.T.reserve).toBeCloseTo(10 * 1 * 0.2);
-  });
-
-  it('counts unestimated issues at the team median and issues as 1 for teams without estimates', () => {
-    const snap = fixture([
-      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: null }),
-      issue({ teamId: 'U', cycleId: 'u3', assigneeId: 'B', estimate: null }),
-    ]);
-    const m = buildModel({ snapshot: snap, ooo: null, planner: planner(), range, today: TODAY });
-    const a = m.personWindow('A', '2026-11-02', '2026-11-15').items[0];
-    expect(a.unestimated).toBe(true);
-    expect(a.fullPoints).toBe(5); // median of the fixture's estimates
-    const b = m.personWindow('B', '2026-11-02', '2026-11-15').items[0];
-    expect(b.unestimated).toBe(false);
-    expect(b.fullPoints).toBe(1);
-  });
-});
-
-describe('allocation and shared commitments', () => {
-  const snap = fixture([
-    issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'B', estimate: 3 }),
-    issue({ teamId: 'U', cycleId: 'u3', assigneeId: 'B' }),
-  ]);
-
-  it('splits a shared person by scheduled work when there is no history', () => {
-    const m = buildModel({ snapshot: snap, ooo: null, planner: planner(), range, today: TODAY });
-    const a = m.allocation.get('B')!;
-    expect(a.source).toBe('planned');
-    expect(a.shares.T).toBeCloseTo(0.75);
-    expect(a.shares.U).toBeCloseTo(0.25);
-  });
-
-  it('reports other teams as shared commitments', () => {
-    const m = buildModel({ snapshot: snap, ooo: null, planner: planner({ settings: { ...DEFAULT_SETTINGS, defaultUnplannedBuffer: 0 } }), range, today: TODAY });
-    const w = m.personWindow('B', '2026-11-02', '2026-11-15');
-    const b = breakdown(w, 'T');
-    expect(b.planned).toBeCloseTo(3);
-    expect(b.shared).toBeCloseTo(1);
-    expect(b.sharedByTeam).toEqual({ U: 1 });
-  });
-
-  it('uses allocation overrides for team capacity', () => {
-    const m = buildModel({ snapshot: snap, ooo: null, planner: planner({ allocations: { B: { T: 1, U: 1 } } }), range, today: TODAY });
-    expect(m.allocation.get('B')!.shares).toEqual({ T: 0.5, U: 0.5 });
-    const t = summarizeTeam(m, 'T');
-    const c3 = t.cycles.find((c) => c.cycle.id === 'c3')!;
-    // A: 10 days × 1.0; B: 10 days × 1.0 × 50%
-    expect(c3.capacity).toBeCloseTo(15);
-    expect(c3.sharedLost).toBeCloseTo(5);
-  });
-});
-
-describe('summaries', () => {
   it('classifies utilization with thresholds', () => {
     expect(classify(5, 10, DEFAULT_SETTINGS).status).toBe('under');
     expect(classify(9, 10, DEFAULT_SETTINGS).status).toBe('healthy');
     expect(classify(11, 10, DEFAULT_SETTINGS).status).toBe('at-risk');
     expect(classify(12, 10, DEFAULT_SETTINGS).status).toBe('over');
     expect(classify(1, 0, DEFAULT_SETTINGS).status).toBe('over');
-    expect(classify(0, 0, DEFAULT_SETTINGS).status).toBe('none');
-  });
-
-  it('explains an overloaded person with absence and shared work', () => {
-    const snap = fixture([
-      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 8 }),
-      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 8 }),
-    ]);
-    const m = buildModel({ snapshot: snap, ooo: ooo([{ start: '2026-11-02', end: '2026-11-06' }]), planner: planner(), range: { from: TODAY, to: '2026-11-15' }, today: TODAY });
-    const a = summarizePeople(m, null).find((p) => p.person.id === 'A')!;
-    expect(a.total.status).toBe('over');
-    expect(a.why[0]).toMatch(/5 OOO days \(vacation\)/);
-    expect(a.why.some((w) => /planned Team T work alone/.test(w))).toBe(true);
-    expect(a.weeks).toHaveLength(2);
   });
 
   it('never computes capacity before today', () => {
-    const m = buildModel({ snapshot: fixture(), ooo: null, planner: planner(), range: { from: '2026-10-01', to: '2026-11-15' }, today: TODAY });
-    expect(m.from).toBe(TODAY);
+    expect(buildModel({ snapshot: fixture(), ooo: null, planner: planner(), range: { from: '2026-10-01', to: '2026-11-15' }, today: TODAY }).from).toBe(TODAY);
+  });
+});
+
+describe('load', () => {
+  it('weights remaining work by status: Todo 100%, In Progress 50%, In Review 25%', () => {
+    const snap = fixture([
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 4, stateType: 'unstarted', stateName: 'Todo' }),
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 4, stateType: 'started', stateName: 'In Progress' }),
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 4, stateType: 'started', stateName: 'In Review' }),
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 4, stateType: 'completed' }),
+    ]);
+    const w = build(snap).personWindow('A', '2026-11-02', '2026-11-15');
+    expect(w.items.map((i) => i.weight).sort()).toEqual([0.25, 0.5, 1]);
+    expect(w.load).toBeCloseTo(4 + 2 + 1);
+  });
+
+  it('spreads cycle work over the cycle and splits planned from added mid-cycle', () => {
+    const snap = fixture([
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 10, addedToCycleAt: '2026-11-02T09:00:00Z' }),
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 2, addedToCycleAt: '2026-11-03T09:00:00Z' }),
+    ]);
+    const week1 = build(snap).personWindow('A', '2026-11-02', '2026-11-08');
+    expect(week1.loadByTeam.T.planned).toBeCloseTo(5);
+    expect(week1.loadByTeam.T.unplanned).toBeCloseTo(1);
+  });
+
+  it('spreads unscheduled work to its due date, else its project target; no date means no load', () => {
+    const snap = fixture(
+      [
+        issue({ teamId: 'T', cycleId: null, assigneeId: 'A', estimate: 10, projectId: 'P' }), // to project target Nov 13
+        issue({ teamId: 'T', cycleId: null, assigneeId: 'A', estimate: 4, dueDate: '2026-11-06', projectId: 'P' }), // due date wins
+        issue({ teamId: 'T', cycleId: null, assigneeId: 'A', estimate: 5 }), // no date: not load
+      ],
+      [project()],
+    );
+    const m = build(snap);
+    const w = m.personWindow('A', '2026-11-02', '2026-11-08');
+    expect(w.loadByTeam.T.unscheduled).toBeCloseTo(5 + 4);
+    expect(w.items.map((i) => i.dateSource).sort()).toEqual(['due', 'project']);
+    expect(m.personWindow('A', '2026-11-16', '2026-11-22').load).toBe(0);
+  });
+
+  it('puts overdue unscheduled work on the current week', () => {
+    const snap = fixture([issue({ teamId: 'T', cycleId: null, assigneeId: 'A', estimate: 5, dueDate: '2026-10-20' })]);
+    const w = build(snap).personWindow('A', '2026-11-02', '2026-11-08');
+    expect(w.load).toBeCloseTo(5);
+    expect(w.items[0].overdue).toBe(true);
+  });
+
+  it('counts unestimated issues at the team median and issues as 1 for teams without estimates', () => {
+    const snap = fixture([issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: null }), issue({ teamId: 'U', cycleId: 'u3', assigneeId: 'B', estimate: null })]);
+    const m = build(snap);
+    expect(m.personWindow('A', '2026-11-02', '2026-11-15').items[0]).toMatchObject({ unestimated: true, fullPoints: 5 });
+    expect(m.personWindow('B', '2026-11-02', '2026-11-15').items[0]).toMatchObject({ unestimated: false, fullPoints: 1 });
+  });
+});
+
+describe('teams and projects', () => {
+  it('splits a shared person by scheduled work and reports their plannable time per team', () => {
+    const snap = fixture([issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'B', estimate: 3 }), issue({ teamId: 'U', cycleId: 'u3', assigneeId: 'B' })]);
+    const m = build(snap, { bufferPct: 0.1 });
+    expect(m.allocation.get('B')!).toMatchObject({ source: 'planned', shares: { T: 0.75, U: 0.25 } });
+    const t = teamWindow(m, 'T', '2026-11-02', '2026-11-15');
+    // A: 10 available; B: 10 available × 75% → 17.5 available, 10% buffer → 15.75 plannable
+    expect(t.available).toBeCloseTo(17.5);
+    expect(t.plannable).toBeCloseTo(15.75);
+    expect(t.sharedLost).toBeCloseTo(2.5);
+    expect(t.load).toBeCloseTo(3);
+  });
+
+  it('breaks team load down by project, including unassigned work', () => {
+    const snap = fixture(
+      [
+        issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 4, projectId: 'P' }),
+        issue({ teamId: 'T', cycleId: 'c3', assigneeId: null, estimate: 2, projectId: 'P' }),
+        issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 3 }),
+      ],
+      [project()],
+    );
+    const t = teamWindow(build(snap), 'T', '2026-11-02', '2026-11-15');
+    expect(t.byProject.P.points).toBeCloseTo(6);
+    expect(t.byProject.none.points).toBeCloseTo(3);
+    expect(t.unassigned).toBeCloseTo(2);
+    expect(Object.values(t.byProject).reduce((a, p) => a + p.points, 0)).toBeCloseTo(t.load);
+  });
+});
+
+describe('periodBuckets', () => {
+  it('builds week, month and quarter periods clipped to today', () => {
+    expect(periodBuckets('2026-10-28', 'week', 2, 2).map((x) => [x.start, x.end, x.label])).toEqual([
+      ['2026-10-28', '2026-11-08', 'Oct 26 – Nov 8'],
+      ['2026-11-09', '2026-11-22', 'Nov 9 – Nov 22'],
+    ]);
+    expect(periodBuckets('2026-11-15', 'month', 1, 3).map((x) => x.label)).toEqual(['Nov 2026', 'Dec 2026', 'Jan 2027']);
+    expect(periodBuckets('2026-12-15', 'month', 2, 1)[0].label).toBe('Dec 2026 – Jan 2027');
+    expect(periodBuckets('2026-11-15', 'quarter', 1, 2).map((x) => x.label)).toEqual(['Q4 2026', 'Q1 2027']);
   });
 });

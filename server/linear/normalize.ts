@@ -1,5 +1,5 @@
 import { dayInTimezone } from '../../shared/calendar';
-import type { Cycle, Issue, Person, Project, Snapshot, StateType, Team } from '../../shared/types';
+import { SNAPSHOT_VERSION, type Cycle, type Issue, type Person, type Project, type Snapshot, type StateType, type Team } from '../../shared/types';
 
 // Raw GraphQL shapes → domain model.
 
@@ -53,6 +53,7 @@ export interface RawIssue {
   url: string;
   priority: number | null;
   estimate: number | null;
+  dueDate: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -139,6 +140,7 @@ export function normalizeSnapshot(raw: {
       priority: i.priority ?? 0,
       stateType,
       stateName: i.state?.name ?? stateType,
+      dueDate: i.dueDate ?? null,
       projectId: i.project?.id ?? null,
       projectName: i.project?.name ?? null,
       labels: (i.labels?.nodes ?? []).map((l) => l.name),
@@ -167,6 +169,7 @@ export function normalizeSnapshot(raw: {
   }));
 
   return {
+    version: SNAPSHOT_VERSION,
     source: 'linear',
     organizationName: raw.organization.name,
     urlKey: raw.organization.urlKey,
