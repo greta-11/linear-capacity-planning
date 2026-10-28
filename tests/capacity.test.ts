@@ -151,11 +151,24 @@ describe('teams and projects', () => {
     const m = build(snap, { bufferPct: 0.1 });
     expect(m.allocation.get('B')!).toMatchObject({ source: 'planned', shares: { T: 0.75, U: 0.25 } });
     const t = teamWindow(m, 'T', '2026-11-02', '2026-11-15');
-    // A: 10 available; B: 10 available × 75% → 17.5 available, 10% buffer → 15.75 plannable
-    expect(t.available).toBeCloseTo(17.5);
-    expect(t.plannable).toBeCloseTo(15.75);
+    // A has no work in range, so only B counts: 10 available × 75% → 7.5, 10% buffer → 6.75 plannable
+    expect(t.available).toBeCloseTo(7.5);
+    expect(t.plannable).toBeCloseTo(6.75);
     expect(t.sharedLost).toBeCloseTo(2.5);
     expect(t.load).toBeCloseTo(3);
+  });
+
+  it('leaves out people with no planned work in the range (0% everywhere): no capacity, no row', () => {
+    const snap = fixture([issue({ teamId: 'T', cycleId: 'c4', assigneeId: 'B', estimate: 3 })]);
+    const m = build(snap);
+    expect([...m.idlePeople]).toEqual(['A']);
+    expect(m.inPlan('A')).toBe(false);
+    expect(m.inPlan('B')).toBe(true);
+    // B's only work is in c4, but anywhere in the range is enough to count in c3 too.
+    expect(teamWindow(m, 'T', '2026-11-02', '2026-11-15').members.map((x) => x.personId)).toEqual(['B']);
+    // With work, A counts again.
+    const busy = build(fixture([issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 1 })]));
+    expect(busy.inPlan('A')).toBe(true);
   });
 
   it('breaks team load down by project, including unassigned work', () => {

@@ -186,6 +186,10 @@ export interface CapacityModel {
   issuePoints(issueId: string, start: Day, end: Day): number;
   /** Work already done on an issue in its current cycle, spread over the cycle's elapsed days. */
   doneSpreadOf(issueId: string): Spread | null;
+  /** Active people with no planned load anywhere in the range (0% in every period). */
+  idlePeople: Set<string>;
+  /** Whether a person counts: active, with planned load somewhere in the range. */
+  inPlan(personId: string): boolean;
   isCompletedCycle(cycle: Cycle): boolean;
   isActiveCycle(cycle: Cycle): boolean;
   completedCyclesOf(teamId: string): Cycle[];
@@ -521,6 +525,13 @@ export function buildModel(input: CapacityInput): CapacityModel {
     return out;
   };
 
+  // People with no planned load anywhere in the range would show 0% in every period and
+  // pad their teams' capacity, so they're left out of capacity, rows and recommendations.
+  const idlePeople = new Set(
+    snapshot.people.filter((p) => p.active && !(spreadsByAssignee.get(p.id) ?? []).some((s) => portion(s, from, to) > 0)).map((p) => p.id),
+  );
+  const inPlan = (personId: string) => !!people.get(personId)?.active && !idlePeople.has(personId);
+
   // --- Allocation (share of time per team, for people on several teams) ---
   const allocation = new Map<string, AllocationInfo>();
   for (const p of snapshot.people) {
@@ -621,6 +632,8 @@ export function buildModel(input: CapacityInput): CapacityModel {
       return s ? portion(s, start, end) : 0;
     },
     doneSpreadOf: (id) => doneById.get(id) ?? null,
+    idlePeople,
+    inPlan,
     isCompletedCycle,
     isActiveCycle,
     completedCyclesOf,
@@ -646,8 +659,7 @@ export function teamWindow(model: CapacityModel, teamId: string, start: Day, end
   let available = 0;
   const members: TeamMember[] = [];
   for (const pid of team.memberIds) {
-    const person = model.people.get(pid);
-    if (!person?.active) continue;
+    if (!model.inPlan(pid)) continue;
     const w = model.personWindow(pid, start, end);
     const share = model.allocation.get(pid)!.shares[teamId] ?? 0;
     fullBaseline += w.baseline;

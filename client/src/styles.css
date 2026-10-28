@@ -1669,3 +1669,12 @@ ul.plain li {
   border-top: 1px solid var(--border);
   padding-top: 8px;
 }
+.idle-note {
+  color: var(--text-2);
+}
+.idle-note > summary {
+  cursor: pointer;
+}
+.idle-note ul {
+  margin: 6px 0 4px;
+}
