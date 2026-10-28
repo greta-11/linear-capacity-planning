@@ -66,8 +66,16 @@ export function DataStrip({ state }: { state: AppState }) {
             <div className={`source-meta ${stale ? 'synced-stale' : ''}`} title={fetchedAt ? new Date(fetchedAt).toLocaleString() : ''}>
               {lastError && !pull.isPending ? <span className="sync-error">Last sync failed · </span> : null}
               Synced {ago(fetchedAt)}
-              {s ? ` · ${s.issues.length} issues · ${s.projects.length} projects` : ''}
+              {s ? ` · ${s.view ? s.view.issueIds.length : s.issues.length} issues · ${s.projects.length} projects` : ''}
             </div>
+            {s?.view && (
+              <div className="source-meta" data-testid="linear-view">
+                View:{' '}
+                <a href={s.view.url} target="_blank" rel="noreferrer" className="link">
+                  {s.view.name} ↗
+                </a>
+              </div>
+            )}
           </div>
           <button className="btn btn-primary btn-small" onClick={syncLinear} disabled={pull.isPending} data-testid="sync-button">
             <span className={pull.isPending ? 'spin' : ''} aria-hidden>
@@ -85,7 +93,7 @@ export function DataStrip({ state }: { state: AppState }) {
               Workday <span className="badge">OOO via CSV</span>
             </div>
             <div className="source-meta" title="OOO data is imported from a Workday CSV export">
-              {ooo ? `${ooo.fileName}${ooo.generated ? ' (demo)' : ''} · ${ooo.entries.length} entries` : 'No export imported'}
+              {ooo ? `${ooo.fileName}${ooo.generated ? ' (sample)' : ''} · ${ooo.entries.length} entries` : 'No export imported'}
               {ooo?.problems.length ? <span className="warn-text"> · {ooo.problems.length} problem(s)</span> : null} · synced {ago(state.workdaySyncedAt ?? ooo?.uploadedAt)}
             </div>
           </div>

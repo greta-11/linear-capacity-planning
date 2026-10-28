@@ -85,7 +85,7 @@ export interface Issue {
 }
 
 /** Bump when the snapshot shape changes so stored snapshots are pulled again. */
-export const SNAPSHOT_VERSION = 3;
+export const SNAPSHOT_VERSION = 4;
 
 export interface Snapshot {
   version?: number;
@@ -94,6 +94,8 @@ export interface Snapshot {
   /** Used to build links when an issue url is missing. */
   urlKey: string | null;
   fetchedAt: string;
+  /** Set when the issues in scope come from one saved Linear view. */
+  view?: { id: string; name: string; url: string; issueIds: string[] } | null;
   /** Demo mode only: the day the demo workspace was generated for. */
   demoSeedDay?: Day;
   teams: Team[];

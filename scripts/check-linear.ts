@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { localToday } from '../shared/calendar';
 import { LinearError } from '../server/linear/client';
 import { fetchSnapshot, fetchViewer } from '../server/linear/queries';
+import { configuredView } from '../server/linear/view';
 import { store } from '../server/store';
 
 // Verifies LINEAR_API_KEY and prints what the planner would pull, without saving anything.
@@ -16,8 +17,17 @@ if (!key) {
 try {
   const { organization, viewer } = await fetchViewer(key);
   console.log(`✓ Authenticated as ${viewer.name} <${viewer.email}> in ${organization.name}`);
-  const snap = await fetchSnapshot(key, localToday(), store.planner().settings.lookbackCycles, (m) => console.log(`  fetched ${m}`));
+  const view = configuredView();
+  console.log(view ? `  Source: Linear view ${view.url ?? view.id}${view.isDefault ? ' (default)' : ''}` : '  Source: whole workspace (LINEAR_VIEW=all)');
+  const snap = await fetchSnapshot(key, localToday(), store.planner().settings.lookbackCycles, (m) => console.log(`  fetched ${m}`), view);
   console.log('');
+  if (snap.view) {
+    const inView = new Set(snap.view.issueIds);
+    const viewIssues = snap.issues.filter((i) => inView.has(i.id));
+    const open = viewIssues.filter((i) => i.stateType !== 'completed' && i.stateType !== 'canceled').length;
+    const assignees = new Set(viewIssues.map((i) => i.assigneeId).filter(Boolean)).size;
+    console.log(`View "${snap.view.name}": ${viewIssues.length} issues (${open} open), ${assignees} assignees, ${snap.teams.length} teams\n`);
+  }
   for (const team of snap.teams) {
     const cycles = snap.cycles.filter((c) => c.teamId === team.id);
     const issues = snap.issues.filter((i) => i.teamId === team.id);

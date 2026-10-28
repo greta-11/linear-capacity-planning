@@ -1,11 +1,12 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { periodBuckets, type Bucket, type PeriodUnit } from '../../shared/calendar';
-import { buildModel, defaultRange, type CapacityModel, type Status } from '../../shared/capacity';
+import { buildModel, defaultRange, planningStart, type CapacityModel, type Status } from '../../shared/capacity';
 import { summarizeHygiene, type HygieneSummary } from '../../shared/hygiene';
+import { planReassignments, type ReassignmentPlan } from '../../shared/reassign';
 import type { VelocityMode } from '../../shared/types';
 import type { AppState } from './api';
 
-export type View = 'hygiene' | 'heatmap' | 'recs';
+export type View = 'hygiene' | 'heatmap';
 export type HeatmapMode = 'people' | 'projects';
 
 export interface HeatmapFilters {
@@ -22,20 +23,21 @@ export interface HeatmapFilters {
 
 export interface Filters {
   view: View;
-  /** Shared by every tab so the heat map and recommendations agree. */
+  /** Shared by every tab. */
   velocity: VelocityMode;
   /** Share of available capacity held back for unplanned work, for everyone. */
   bufferPct: number;
   heatmap: HeatmapFilters;
-  recs: { teamId: string | null };
 }
 
 interface Ctx {
   state: AppState;
   model: CapacityModel;
-  /** Heat map periods, also used by recommendations. */
+  /** Heat map periods, starting at the earliest open issue's cycle. */
   buckets: Bucket[];
   hygiene: HygieneSummary;
+  /** Reassignments and remaining overflow over all periods, shown in the cell drawers. */
+  plan: ReassignmentPlan;
   filters: Filters;
   setFilters: (patch: Partial<Filters>) => void;
 }
@@ -44,7 +46,8 @@ const PlannerContext = createContext<Ctx | null>(null);
 
 export function PlannerProvider({ state, filters, setFilters, children }: { state: AppState; filters: Filters; setFilters: Ctx['setFilters']; children: ReactNode }) {
   const h = filters.heatmap;
-  const buckets = useMemo(() => periodBuckets(state.today, h.unit, h.size, h.count), [state.today, h.unit, h.size, h.count]);
+  const anchor = useMemo(() => planningStart(state.snapshot!, state.today), [state.snapshot, state.today]);
+  const buckets = useMemo(() => periodBuckets(anchor, h.unit, h.size, h.count), [anchor, h.unit, h.size, h.count]);
   const velocityKey = JSON.stringify(filters.velocity);
   const model = useMemo(
     () =>
@@ -61,7 +64,9 @@ export function PlannerProvider({ state, filters, setFilters, children }: { stat
     [state, buckets, velocityKey, filters.bufferPct],
   );
   const hygiene = useMemo(() => summarizeHygiene(model), [model]);
-  return <PlannerContext.Provider value={{ state, model, buckets, hygiene, filters, setFilters }}>{children}</PlannerContext.Provider>;
+  // The greedy pass depends on period order, so it runs once over every period.
+  const plan = useMemo(() => planReassignments(model, buckets), [model, buckets]);
+  return <PlannerContext.Provider value={{ state, model, buckets, hygiene, plan, filters, setFilters }}>{children}</PlannerContext.Provider>;
 }
 
 export function usePlanner(): Ctx {
