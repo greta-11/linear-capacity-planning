@@ -244,3 +244,41 @@ export function useElementWidth<T extends HTMLElement>(fallback = 720) {
   }, []);
   return [ref, width] as const;
 }
+
+/**
+ * A drawer section whose body can be collapsed. Open by default; the choice is remembered
+ * per section in this browser.
+ */
+export function Section({ id, title, count, children, testId }: { id: string; title: ReactNode; count?: number; children: ReactNode; testId?: string }) {
+  const key = `drawer-section:${id}`;
+  const [open, setOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem(key) !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const toggle = () =>
+    setOpen((o) => {
+      try {
+        window.localStorage.setItem(key, o ? '0' : '1');
+      } catch {
+        // Storage can be unavailable (private windows); the toggle still works.
+      }
+      return !o;
+    });
+  return (
+    <section className={`collapsible ${open ? 'collapsible-open' : ''}`} data-testid={testId}>
+      <h4 className="collapsible-head">
+        <button type="button" className="collapsible-toggle" aria-expanded={open} onClick={toggle} data-testid={testId ? `${testId}-toggle` : undefined}>
+          <span className="caret" aria-hidden>
+            {open ? '▾' : '▸'}
+          </span>
+          {title}
+          {count != null && <span className="count">{count}</span>}
+        </button>
+      </h4>
+      {open && <div className="collapsible-body">{children}</div>}
+    </section>
+  );
+}

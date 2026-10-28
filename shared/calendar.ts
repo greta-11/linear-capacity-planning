@@ -114,22 +114,24 @@ function periodLabel(unit: PeriodUnit, size: number, start: Day, end: Day): stri
 }
 
 /**
- * `count` consecutive periods of `size` weeks, months or quarters, starting with the
- * period that contains `today`. Weeks align to Monday, months to the 1st, quarters to
- * Jan/Apr/Jul/Oct. The first period is clipped to start today; labels describe the full period.
+ * `count` consecutive periods of `size` weeks, months or quarters, starting on `anchor`
+ * (the planning start, which may be in the past). Weeks run from the anchor in steps of
+ * 7 days, so 2-week periods line up with 2-week cycles. Month and quarter periods end on
+ * calendar boundaries: the first one runs from the anchor to the end of its month/quarter.
  */
-export function periodBuckets(today: Day, unit: PeriodUnit, size: number, count: number): Bucket[] {
+export function periodBuckets(anchor: Day, unit: PeriodUnit, size: number, count: number): Bucket[] {
   const n = Math.max(1, Math.floor(size));
   const out: Bucket[] = [];
-  let periodStart: Day;
-  if (unit === 'week') periodStart = weekStart(today);
-  else if (unit === 'month') periodStart = `${today.slice(0, 7)}-01`;
-  else periodStart = addMonths(`${today.slice(0, 4)}-01-01`, Math.floor((Number(today.slice(5, 7)) - 1) / 3) * 3);
+  let periodStart: Day = anchor;
+  // Calendar start of the anchor's month/quarter, for month and quarter steps.
+  let calendarStart: Day =
+    unit === 'month' ? `${anchor.slice(0, 7)}-01` : addMonths(`${anchor.slice(0, 4)}-01-01`, Math.floor((Number(anchor.slice(5, 7)) - 1) / 3) * 3);
   for (let i = 0; i < Math.max(1, count); i++) {
-    const next = unit === 'week' ? addDays(periodStart, 7 * n) : addMonths(periodStart, unit === 'month' ? n : 3 * n);
+    const next = unit === 'week' ? addDays(periodStart, 7 * n) : addMonths(calendarStart, unit === 'month' ? n : 3 * n);
     const end = addDays(next, -1);
-    out.push({ id: periodStart, label: periodLabel(unit, n, periodStart, end), start: i === 0 ? maxDay(periodStart, today) : periodStart, end });
+    out.push({ id: periodStart, label: periodLabel(unit, n, unit === 'week' ? periodStart : calendarStart, end), start: periodStart, end });
     periodStart = next;
+    calendarStart = next;
   }
   return out;
 }

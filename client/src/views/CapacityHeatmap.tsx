@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { addDays, countWorkingDays, dayInTimezone, formatShort, maxDay, overlap, weekStart, type Bucket, type PeriodUnit } from '../../../shared/calendar';
-import { cycleName, isOpen, teamWindow, type CapacityModel, type LoadItem, type PersonWindow, type Status, type TeamWindow } from '../../../shared/capacity';
+import { cycleName, isOpen, teamLoadTotal, teamWindow, type CapacityModel, type LoadItem, type PersonWindow, type Status, type TeamWindow } from '../../../shared/capacity';
 import type { VelocityMode } from '../../../shared/types';
 import { MultiSelect } from '../components/MultiSelect';
 import { Drawer } from '../components/Overlay';
-import { Empty, IssueTable, PersonName, STATUS_ICON, StatusPill, TipRows, TooltipProvider, useTipTarget } from '../components/ui';
+import { CellRecommendations } from '../components/Recommendations';
+import { Empty, IssueTable, PersonName, Section, STATUS_ICON, StatusPill, TipRows, TooltipProvider, useTipTarget } from '../components/ui';
 import { usePlanner, type HeatmapFilters, type HeatmapMode } from '../context';
 import { days, formatRange, pct, pts, STATUS_LABEL } from '../format';
 import { VELOCITY_SOURCE_LABEL } from './velocity';
@@ -25,6 +26,12 @@ type Selection =
   | { kind: 'team'; teamId: string; bucket: Bucket }
   | { kind: 'project'; teamId: string; projectKey: string; bucket: Bucket };
 
+/** Recommendations behind a cell: suggested moves, and whether the team still overflows. */
+interface CellRecs {
+  moves: number;
+  overflow: boolean;
+}
+
 interface ProjectRow {
   key: string;
   name: string;
@@ -33,8 +40,9 @@ interface ProjectRow {
 }
 
 export function CapacityHeatmap() {
-  const { model, filters, setFilters, buckets } = usePlanner();
+  const { model, filters, setFilters, buckets, plan } = usePlanner();
   const h = filters.heatmap;
+  const today = model.input.today;
   const setH = (patch: Partial<HeatmapFilters>) => setFilters({ heatmap: { ...h, ...patch } });
   const [selection, setSelection] = useState<Selection | null>(null);
   // Team groups start collapsed (team-level view). Person, project and capacity-type
@@ -97,6 +105,27 @@ export function CapacityHeatmap() {
       });
   }, [model, buckets, h.teams, h.people, h.mode, projectSet, projectPeople, statusSet, h.projects.length]);
 
+  // Recommendations per cell, keyed `person|team|project:<id>:<period index>`.
+  const recs = useMemo(() => {
+    const out = new Map<string, CellRecs>();
+    const add = (key: string, patch: Partial<CellRecs>) => {
+      const r = out.get(key) ?? { moves: 0, overflow: false };
+      out.set(key, { moves: r.moves + (patch.moves ?? 0), overflow: r.overflow || !!patch.overflow });
+    };
+    for (const r of plan.reassignments) {
+      add(`person:${r.from}:${r.bucketIndex}`, { moves: 1 });
+      add(`person:${r.to}:${r.bucketIndex}`, { moves: 1 });
+      add(`team:${r.teamId}:${r.bucketIndex}`, { moves: 1 });
+      add(`project:${r.teamId}/${model.issues.get(r.issueId)?.projectId ?? NO_PROJECT}:${r.bucketIndex}`, { moves: 1 });
+    }
+    for (const o of plan.overflow) {
+      add(`team:${o.teamId}:${o.bucketIndex}`, { overflow: true });
+      for (const p of o.peopleOver) add(`person:${p.personId}:${o.bucketIndex}`, { overflow: true });
+    }
+    return out;
+  }, [plan, model]);
+  const teamOverflowCount = plan.overflow.filter((o) => o.teamOverBy > 0.05).length;
+
   const allExpanded = groups.length > 0 && groups.every((g) => isExpanded(g.team.id));
   const filtersActive = h.projects.length + h.teams.length + h.people.length + h.statuses.length > 0;
 
@@ -104,6 +133,11 @@ export function CapacityHeatmap() {
     <TooltipProvider>
       <div className="stack">
         <Toolbar />
+        <p className="small rec-summary" data-testid="rec-summary">
+          <strong>{plan.reassignments.length}</strong> suggested reassignment{plan.reassignments.length === 1 ? '' : 's'} ·{' '}
+          <strong>{teamOverflowCount}</strong> team period{teamOverflowCount === 1 ? '' : 's'} over capacity after reassignment (need a scope or timeline decision). Cells marked{' '}
+          <span className="cell-rec">↔</span> or <span className="cell-rec cell-rec-flag">⚑</span> have recommendations: click one to see them, with their evidence.
+        </p>
         <p className="lede">
           {h.mode === 'people'
             ? "Each cell is a person's planned load as a % of their plannable capacity for that period (all their teams and projects). Team rows compare the team's work with its members' plannable time on that team."
@@ -138,10 +172,16 @@ export function CapacityHeatmap() {
                 <thead>
                   <tr>
                     <th className="hm-name" />
-                    {buckets.map((b, i) => (
+                    {buckets.map((b) => (
                       <th key={b.id} title={formatRange(b.start, b.end)} data-testid="heatmap-col">
                         {b.label}
-                        {i === 0 && b.start !== b.id && <div className="muted small">from today</div>}
+                        {b.label !== formatRange(b.start, b.end) && <div className="muted small">{formatRange(b.start, b.end)}</div>}
+                        {b.start <= today && today <= b.end && (
+                          <div className="muted small" data-testid="col-current">
+                            {b.start < today ? 'in progress' : 'starts today'}
+                          </div>
+                        )}
+                        {b.end < today && <div className="muted small">past</div>}
                       </th>
                     ))}
                   </tr>
@@ -170,7 +210,14 @@ export function CapacityHeatmap() {
                         </div>
                       </th>
                       {g.teamCells.map((w, i) => (
-                        <TeamCell key={buckets[i].id} w={w} bucket={buckets[i]} teamName={g.team.name} onOpen={() => setSelection({ kind: 'team', teamId: g.team.id, bucket: buckets[i] })} />
+                        <TeamCell
+                          key={buckets[i].id}
+                          w={w}
+                          bucket={buckets[i]}
+                          teamName={g.team.name}
+                          recs={recs.get(`team:${g.team.id}:${i}`)}
+                          onOpen={() => setSelection({ kind: 'team', teamId: g.team.id, bucket: buckets[i] })}
+                        />
                       ))}
                     </tr>
                     {isExpanded(g.team.id) &&
@@ -200,6 +247,7 @@ export function CapacityHeatmap() {
                                 bucket={buckets[i]}
                                 name={person.name}
                                 highlight={projectSet.size > 0 && w.items.some((it) => it.projectId && projectSet.has(it.projectId))}
+                                recs={recs.get(`person:${person.id}:${i}`)}
                                 onOpen={() => setSelection({ kind: 'person', personId: person.id, bucket: buckets[i] })}
                               />
                             ))}
@@ -222,6 +270,7 @@ export function CapacityHeatmap() {
                               name={p.name}
                               teamName={g.team.name}
                               teamPlannable={g.teamCells[i].plannable}
+                              recs={recs.get(`project:${g.team.id}/${p.key}:${i}`)}
                               onOpen={() => setSelection({ kind: 'project', teamId: g.team.id, projectKey: p.key, bucket: buckets[i] })}
                             />
                           ))}
@@ -412,7 +461,17 @@ const cellKeys = (onOpen: () => void) => ({
   onKeyDown: (e: React.KeyboardEvent) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onOpen()),
 });
 
-function PersonCell({ w, bucket, name, highlight, onOpen }: { w: PersonWindow; bucket: Bucket; name: string; highlight: boolean; onOpen: () => void }) {
+function RecMark({ recs }: { recs?: CellRecs }) {
+  if (!recs || (!recs.moves && !recs.overflow)) return null;
+  const title = [recs.moves ? `${recs.moves} suggested reassignment${recs.moves === 1 ? '' : 's'}` : '', recs.overflow ? 'still over after reassignment (on the days left)' : ''].filter(Boolean).join(' · ');
+  return (
+    <span className={`cell-rec ${recs.overflow && !recs.moves ? 'cell-rec-flag' : ''}`} title={title} aria-label={title} data-testid="cell-rec">
+      {recs.moves ? `↔${recs.moves}` : '⚑'}
+    </span>
+  );
+}
+
+function PersonCell({ w, bucket, name, highlight, recs, onOpen }: { w: PersonWindow; bucket: Bucket; name: string; highlight: boolean; recs?: CellRecs; onOpen: () => void }) {
   const tip = useTipTarget();
   const unscheduled = Object.values(w.loadByTeam).reduce((a, l) => a + l.unscheduled, 0);
   const content = (
@@ -439,11 +498,12 @@ function PersonCell({ w, bucket, name, highlight, onOpen }: { w: PersonWindow; b
     >
       {cellContent(w, w.oooDays)}
       {w.oooDays >= 1 && <span className="cell-ooo" />}
+      <RecMark recs={recs} />
     </td>
   );
 }
 
-function TeamCell({ w, bucket, teamName, onOpen }: { w: TeamWindow; bucket: Bucket; teamName: string; onOpen: () => void }) {
+function TeamCell({ w, bucket, teamName, recs, onOpen }: { w: TeamWindow; bucket: Bucket; teamName: string; recs?: CellRecs; onOpen: () => void }) {
   const tip = useTipTarget();
   const content = (
     <TipRows
@@ -468,6 +528,7 @@ function TeamCell({ w, bucket, teamName, onOpen }: { w: TeamWindow; bucket: Buck
       {...tip(content)}
     >
       {cellContent(w, 0)}
+      <RecMark recs={recs} />
     </td>
   );
 }
@@ -478,6 +539,7 @@ function ProjectCell({
   name,
   teamName,
   teamPlannable,
+  recs,
   onOpen,
 }: {
   cell: ProjectRow['cells'][number];
@@ -485,6 +547,7 @@ function ProjectCell({
   name: string;
   teamName: string;
   teamPlannable: number;
+  recs?: CellRecs;
   onOpen: () => void;
 }) {
   const tip = useTipTarget();
@@ -512,6 +575,7 @@ function ProjectCell({
       {...tip(content)}
     >
       {cell.points > 0.05 ? pct(cell.share) : '—'}
+      <RecMark recs={recs && { moves: recs.moves, overflow: false }} />
     </td>
   );
 }
@@ -556,6 +620,9 @@ function Legend({ mode, projectFilter }: { mode: HeatmapMode; projectFilter: boo
           Includes selected project work
         </span>
       )}
+      <span className="legend-item">
+        <span className="cell-rec">↔</span> Suggested reassignments · <span className="cell-rec cell-rec-flag">⚑</span> Still over after reassignment
+      </span>
       <span className="legend-item muted">% of plannable capacity (after OOO and buffer)</span>
     </div>
   );
@@ -574,7 +641,10 @@ function itemMath(model: CapacityModel, item: LoadItem, bucket: Bucket) {
   const target = issue.dueDate ?? project?.targetDate ?? null;
   let start = today;
   let end = today;
-  if (cycle) {
+  if (cycle && item.kind === 'done') {
+    start = cycle.startDate;
+    end = addDays(today, -1);
+  } else if (cycle) {
     start = maxDay(cycle.startDate, today);
     end = cycle.endDate;
   } else if (target) {
@@ -592,6 +662,10 @@ function itemMath(model: CapacityModel, item: LoadItem, bucket: Bucket) {
 function itemNote(model: CapacityModel, item: LoadItem, bucket: Bucket): string {
   const m = itemMath(model, item, bucket);
   const who = item.assigneeId ? '' : ' · unassigned';
+  if (item.kind === 'done') {
+    const what = m.issue.stateType === 'completed' ? 'completed' : `${pct(item.weight)} done (${m.issue.stateName})`;
+    return `${what} · done work spread over ${m.spreadDays} elapsed working day${m.spreadDays === 1 ? '' : 's'} of the cycle${who}`;
+  }
   const share = item.weight < 1 ? ` · ${pct(item.weight)} left (${m.issue.stateName})` : '';
   if (item.kind === 'unplanned') return `added mid-cycle (${m.addedDay ? formatShort(m.addedDay) : '?'}, after ${formatShort(m.cycle!.startDate)} start)${share}${who}`;
   if (item.kind === 'unscheduled') {
@@ -601,9 +675,20 @@ function itemNote(model: CapacityModel, item: LoadItem, bucket: Bucket): string 
   return `cycle work · ${m.spreadDays} working days left in cycle${share}${who}`;
 }
 
+/** Notes per issue: an issue in a cycle under way can have a done part and a remaining part. */
+function issueNotes(model: CapacityModel, items: LoadItem[], bucket: Bucket): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const i of items) out[i.issueId] = out[i.issueId] ? `${out[i.issueId]}; ${itemNote(model, i, bucket)}` : itemNote(model, i, bucket);
+  return out;
+}
+
 /** "5 pts × 50% = 2.5 remaining over 19 working days, 10 in this period = 1.3 pts" */
 function spreadMath(model: CapacityModel, item: LoadItem, bucket: Bucket) {
   const m = itemMath(model, item, bucket);
+  if (item.kind === 'done') {
+    const done = item.weight < 1 ? ` × ${pct(item.weight)} done = ${pts(item.remainingPoints)}` : ' (completed)';
+    return `${pts(item.fullPoints)} pts${done} over ${m.spreadDays} elapsed working day${m.spreadDays === 1 ? '' : 's'}, ${m.inPeriod} in this period = ${pts(item.points)} pts`;
+  }
   const remaining = item.weight < 1 ? ` × ${pct(item.weight)} = ${pts(item.remainingPoints)} remaining` : '';
   return `${pts(item.fullPoints)} pts${item.unestimated ? ' (unestimated → team median)' : ''}${remaining} over ${m.spreadDays} working day${m.spreadDays === 1 ? '' : 's'}, ${m.inPeriod} in this period = ${pts(item.points)} pts`;
 }
@@ -646,7 +731,8 @@ function CalcExplainer({ items, bucket }: { items: LoadItem[]; bucket: Bucket })
   const { model } = usePlanner();
   const unplanned = items.filter((i) => i.kind === 'unplanned');
   const unscheduled = items.filter((i) => i.kind === 'unscheduled');
-  const partial = items.filter((i) => i.weight < 1);
+  const done = items.filter((i) => i.kind === 'done');
+  const partial = items.filter((i) => i.kind !== 'done' && i.weight < 1);
   const total = (list: LoadItem[]) => pts(list.reduce((a, i) => a + i.points, 0));
   const id = (i: LoadItem) => model.issues.get(i.issueId)!.identifier;
   const w = model.input.planner.settings.statusWeights;
@@ -702,6 +788,27 @@ function CalcExplainer({ items, bucket }: { items: LoadItem[]; bucket: Bucket })
       </details>
       <details>
         <summary>
+          <span className="swatch swatch-done" aria-hidden /> How <strong>Done in cycle</strong> is calculated · {total(done)} pts
+        </summary>
+        <p>
+          Periods start at the earliest open issue's cycle, so a cycle under way counts in full. Its elapsed days (cycle start to yesterday) carry the work already done: completed issues at their full
+          estimate, and the done share of started issues (e.g. 50% of an In Progress issue). The remaining share is spread over the days left. Capacity counts every working day of the period, past ones
+          included.
+        </p>
+        {done.length ? (
+          <ul>
+            {done.map((i) => (
+              <li key={i.issueId}>
+                <strong>{id(i)}</strong> · {spreadMath(model, i, bucket)}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">No work done earlier in a cycle falls in this period.</p>
+        )}
+      </details>
+      <details>
+        <summary>
           How <strong>remaining work by status</strong> is calculated · {partial.length} issue{partial.length === 1 ? '' : 's'} partly done
         </summary>
         <p>
@@ -732,7 +839,7 @@ function PersonCellDetail({ personId, bucket }: { personId: string; bucket: Buck
   const byKind = (k: LoadItem['kind']) => w.items.filter((i) => i.kind === k).reduce((a, i) => a + i.points, 0);
   const max = Math.max(w.baseline, w.load);
   const pointsById = Object.fromEntries(sumBy(w.items, (i) => i.issueId));
-  const notes = Object.fromEntries(w.items.map((i) => [i.issueId, itemNote(model, i, bucket)]));
+  const notes = issueNotes(model, w.items, bucket);
   const ooo = w.oooEntries.map((e) => ({ ...e, entry: model.oooEntries.get(e.entryId)! }));
 
   return (
@@ -782,6 +889,7 @@ function PersonCellDetail({ personId, bucket }: { personId: string; bucket: Buck
             { label: 'Cycle work', value: byKind('planned'), cls: 'swatch-planned' },
             { label: 'Added mid-cycle (unplanned)', value: byKind('unplanned'), cls: 'swatch-unplanned' },
             { label: 'Unscheduled work (spread to date)', value: byKind('unscheduled'), cls: 'swatch-unscheduled' },
+            { label: 'Done in cycle (elapsed days)', value: byKind('done'), cls: 'swatch-done' },
           ]}
         />
         <CalcExplainer items={w.items} bucket={bucket} />
@@ -790,7 +898,7 @@ function PersonCellDetail({ personId, bucket }: { personId: string; bucket: Buck
             <div className="muted">By team</div>
             <ul className="plain">
               {Object.entries(w.loadByTeam)
-                .map(([t, l]) => [t, l.planned + l.unplanned + l.unscheduled] as const)
+                .map(([t, l]) => [t, teamLoadTotal(l)] as const)
                 .filter(([, n]) => n > 0.05)
                 .map(([t, n]) => (
                   <li key={t}>
@@ -811,11 +919,13 @@ function PersonCellDetail({ personId, bucket }: { personId: string; bucket: Buck
           </div>
         </div>
       </section>
-      <section>
-        <h4>Issues in this period ({Object.keys(pointsById).length})</h4>
+      <Section id="recs" title="Recommendations" testId="section-recs">
+        <CellRecommendations scope={{ kind: 'person', personId }} bucket={bucket} />
+      </Section>
+      <Section id="issues" title="Issues in this period" count={Object.keys(pointsById).length} testId="section-issues">
         <IssueTable issueIds={byPriority(model, pointsById)} points={pointsById} notes={notes} notesInline showAssignee={false} showState={false} />
-        <p className="muted small">Sorted by priority. "In range" is the share of each issue's remaining points that falls in this period.</p>
-      </section>
+        <p className="muted small">Sorted by priority. "In range" is the share of each issue's points that falls in this period.</p>
+      </Section>
     </div>
   );
 }
@@ -825,7 +935,7 @@ function TeamCellDetail({ teamId, bucket }: { teamId: string; bucket: Bucket }) 
   const w = teamWindow(model, teamId, bucket.start, bucket.end);
   const max = Math.max(w.fullBaseline, w.load);
   const pointsById = Object.fromEntries(sumBy(w.items, (i) => i.issueId));
-  const notes = Object.fromEntries(w.items.map((i) => [i.issueId, itemNote(model, i, bucket)]));
+  const notes = issueNotes(model, w.items, bucket);
   return (
     <div className="stack drawer-body" data-testid="team-cell-detail">
       <div className="drawer-summary">
@@ -854,13 +964,16 @@ function TeamCellDetail({ teamId, bucket }: { teamId: string; bucket: Bucket }) 
             { label: 'Cycle work', value: w.planned, cls: 'swatch-planned' },
             { label: 'Added mid-cycle (unplanned)', value: w.unplanned, cls: 'swatch-unplanned' },
             { label: 'Unscheduled work (spread to date)', value: w.unscheduled, cls: 'swatch-unscheduled' },
+            { label: 'Done in cycle (elapsed days)', value: w.done, cls: 'swatch-done' },
           ]}
         />
         {w.unassigned > 0.05 && <p className="small muted">{pts(w.unassigned)} pts of this has no assignee; it still counts toward the team.</p>}
         <CalcExplainer items={w.items} bucket={bucket} />
       </section>
-      <section>
-        <h4>Members</h4>
+      <Section id="recs" title="Recommendations" testId="section-recs">
+        <CellRecommendations scope={{ kind: 'team', teamId }} bucket={bucket} />
+      </Section>
+      <Section id="members" title="Members" count={w.members.length} testId="section-members">
         <div className="table-wrap">
           <table className="table table-compact">
             <thead>
@@ -893,12 +1006,11 @@ function TeamCellDetail({ teamId, bucket }: { teamId: string; bucket: Bucket }) 
             </tbody>
           </table>
         </div>
-      </section>
-      <section>
-        <h4>Team issues in this period ({Object.keys(pointsById).length})</h4>
+      </Section>
+      <Section id="issues" title="Team issues in this period" count={Object.keys(pointsById).length} testId="section-issues">
         <IssueTable issueIds={byPriority(model, pointsById)} points={pointsById} notes={notes} notesInline showState={false} />
-        <p className="muted small">Sorted by priority. "In range" is the share of each issue's remaining points that falls in this period.</p>
-      </section>
+        <p className="muted small">Sorted by priority. "In range" is the share of each issue's points that falls in this period.</p>
+      </Section>
     </div>
   );
 }
@@ -909,7 +1021,7 @@ function ProjectCellDetail({ teamId, projectKey, bucket }: { teamId: string; pro
   const items = w.items.filter((i) => (i.projectId ?? NO_PROJECT) === projectKey);
   const points = items.reduce((a, i) => a + i.points, 0);
   const pointsById = Object.fromEntries(sumBy(items, (i) => i.issueId));
-  const notes = Object.fromEntries(items.map((i) => [i.issueId, itemNote(model, i, bucket)]));
+  const notes = issueNotes(model, items, bucket);
   const project = projectKey === NO_PROJECT ? null : model.projects.get(projectKey);
   const byPerson = sumBy(items, (i) => i.assigneeId ?? '');
   return (
@@ -930,8 +1042,11 @@ function ProjectCellDetail({ teamId, projectKey, bucket }: { teamId: string; pro
         </p>
       )}
       {!project && <p className="small muted">Work with no project. Data hygiene lists these issues so they can be added to a project in Linear.</p>}
-      <section>
-        <h4>Who is doing it</h4>
+      <CalcExplainer items={items} bucket={bucket} />
+      <Section id="recs" title="Recommendations" testId="section-recs">
+        <CellRecommendations scope={{ kind: 'project', teamId, projectKey }} bucket={bucket} />
+      </Section>
+      <Section id="who" title="Who is doing it" count={byPerson.length} testId="section-who">
         <ul className="plain small">
           {byPerson.map(([p, n]) => (
             <li key={p || 'none'}>
@@ -939,12 +1054,10 @@ function ProjectCellDetail({ teamId, projectKey, bucket }: { teamId: string; pro
             </li>
           ))}
         </ul>
-        <CalcExplainer items={items} bucket={bucket} />
-      </section>
-      <section>
-        <h4>Issues in this period ({Object.keys(pointsById).length})</h4>
+      </Section>
+      <Section id="issues" title="Issues in this period" count={Object.keys(pointsById).length} testId="section-issues">
         <IssueTable issueIds={byPriority(model, pointsById)} points={pointsById} notes={notes} notesInline showState={false} showProject={false} />
-      </section>
+      </Section>
     </div>
   );
 }

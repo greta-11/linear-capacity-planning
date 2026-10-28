@@ -84,8 +84,10 @@ describe('capacity formula', () => {
     expect(classify(1, 0, DEFAULT_SETTINGS).status).toBe('over');
   });
 
-  it('never computes capacity before today', () => {
-    expect(buildModel({ snapshot: fixture(), ooo: null, planner: planner(), range: { from: '2026-10-01', to: '2026-11-15' }, today: TODAY }).from).toBe(TODAY);
+  it('counts capacity from the start of the range, even before today', () => {
+    const m = buildModel({ snapshot: fixture(), ooo: null, planner: planner(), range: { from: '2026-10-26', to: '2026-11-15' }, today: TODAY });
+    expect(m.from).toBe('2026-10-26');
+    expect(m.personWindow('A', '2026-10-26', '2026-11-08').workingDays).toBe(10);
   });
 });
 
@@ -174,13 +176,20 @@ describe('teams and projects', () => {
 });
 
 describe('periodBuckets', () => {
-  it('builds week, month and quarter periods clipped to today', () => {
-    expect(periodBuckets('2026-10-28', 'week', 2, 2).map((x) => [x.start, x.end, x.label])).toEqual([
-      ['2026-10-28', '2026-11-08', 'Oct 26 – Nov 8'],
-      ['2026-11-09', '2026-11-22', 'Nov 9 – Nov 22'],
+  it('starts at the anchor: weeks step from it, months and quarters end on calendar boundaries', () => {
+    expect(periodBuckets('2026-10-15', 'week', 2, 2).map((x) => [x.start, x.end, x.label])).toEqual([
+      ['2026-10-15', '2026-10-28', 'Oct 15 – Oct 28'],
+      ['2026-10-29', '2026-11-11', 'Oct 29 – Nov 11'],
     ]);
-    expect(periodBuckets('2026-11-15', 'month', 1, 3).map((x) => x.label)).toEqual(['Nov 2026', 'Dec 2026', 'Jan 2027']);
+    expect(periodBuckets('2026-10-15', 'month', 1, 3).map((x) => [x.start, x.end, x.label])).toEqual([
+      ['2026-10-15', '2026-10-31', 'Oct 2026'],
+      ['2026-11-01', '2026-11-30', 'Nov 2026'],
+      ['2026-12-01', '2026-12-31', 'Dec 2026'],
+    ]);
     expect(periodBuckets('2026-12-15', 'month', 2, 1)[0].label).toBe('Dec 2026 – Jan 2027');
-    expect(periodBuckets('2026-11-15', 'quarter', 1, 2).map((x) => x.label)).toEqual(['Q4 2026', 'Q1 2027']);
+    expect(periodBuckets('2026-11-15', 'quarter', 1, 2).map((x) => [x.start, x.label])).toEqual([
+      ['2026-11-15', 'Q4 2026'],
+      ['2027-01-01', 'Q1 2027'],
+    ]);
   });
 });

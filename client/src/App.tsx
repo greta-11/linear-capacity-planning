@@ -8,12 +8,10 @@ import { HygieneBanner } from './components/HygieneBanner';
 import { PlannerProvider, usePlanner, type Filters, type HeatmapMode, type View } from './context';
 import { CapacityHeatmap } from './views/CapacityHeatmap';
 import { DataHygiene } from './views/DataHygiene';
-import { Recommendations } from './views/Recommendations';
 
 const VIEWS: { id: View; label: string }[] = [
   { id: 'hygiene', label: 'Data hygiene' },
   { id: 'heatmap', label: 'Capacity heat map' },
-  { id: 'recs', label: 'Recommendations' },
 ];
 const UNITS: PeriodUnit[] = ['week', 'month', 'quarter'];
 const STATUSES: Status[] = ['over', 'at-risk', 'healthy', 'under'];
@@ -26,14 +24,14 @@ const int = (v: string | null, fallback: number, min: number, max: number) => {
 
 function readUrl(state: AppState): Filters {
   const p = new URLSearchParams(window.location.search);
-  const view = VIEWS.some((v) => v.id === p.get('view')) ? (p.get('view') as View) : 'hygiene';
+  // Recommendations moved into the heat map's cell drawers; old links land there.
+  const view = p.get('view') === 'recs' ? 'heatmap' : VIEWS.some((v) => v.id === p.get('view')) ? (p.get('view') as View) : 'hygiene';
   const vel = p.get('vel');
   const ppw = Number(p.get('ppw'));
   const velocity: VelocityMode =
     vel === 'manual' ? { kind: 'manual', pointsPerWeek: Number.isFinite(ppw) && ppw > 0 ? ppw : 5 } : vel === 'team' ? { kind: 'team-average' } : { kind: 'history' };
   const unit = UNITS.includes(p.get('unit') as PeriodUnit) ? (p.get('unit') as PeriodUnit) : 'week';
   const teamIds = new Set(state.snapshot?.teams.map((t) => t.id) ?? []);
-  const recTeam = p.get('rteam') && teamIds.has(p.get('rteam')!) ? p.get('rteam') : null;
   return {
     view,
     velocity,
@@ -48,7 +46,6 @@ function readUrl(state: AppState): Filters {
       people: list(p.get('ppl')),
       statuses: list(p.get('status')).filter((s): s is Status => STATUSES.includes(s as Status)),
     },
-    recs: { teamId: recTeam },
   };
 }
 
@@ -67,7 +64,6 @@ function writeUrl(f: Filters) {
   if (h.teams.length) p.set('teams', h.teams.join(','));
   if (h.people.length) p.set('ppl', h.people.join(','));
   if (h.statuses.length) p.set('status', h.statuses.join(','));
-  if (f.recs.teamId) p.set('rteam', f.recs.teamId);
   window.history.replaceState(null, '', `?${p.toString()}`);
 }
 
@@ -108,7 +104,6 @@ function Shell({ state }: { state: AppState }) {
         <main className="main">
           {filters.view === 'hygiene' && <DataHygiene />}
           {filters.view === 'heatmap' && <CapacityHeatmap />}
-          {filters.view === 'recs' && <Recommendations />}
         </main>
       </div>
     </PlannerProvider>

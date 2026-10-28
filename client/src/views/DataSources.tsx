@@ -50,7 +50,18 @@ npm run dev              # restart the app`}</pre>
           {s.teams.length} teams · {s.people.length} people · {s.cycles.length} cycles · {s.issues.length} issues
         </dd>
         <dt>Scope</dt>
-        <dd>The last {state.planner.settings.lookbackCycles}+ completed cycles per team (for velocity) and every upcoming cycle, with their issues.</dd>
+        {s.view ? (
+          <dd>
+            Issues in the view{' '}
+            <a href={s.view.url} target="_blank" rel="noreferrer" className="link">
+              {s.view.name} ↗
+            </a>{' '}
+            ({s.view.issueIds.length}), their teams and members, and completed work in the last {state.planner.settings.lookbackCycles}+ cycles for velocity. Set{' '}
+            <code>LINEAR_VIEW</code> in <code>.env</code> to plan another view, or <code>all</code> for the whole workspace.
+          </dd>
+        ) : (
+          <dd>The last {state.planner.settings.lookbackCycles}+ completed cycles per team (for velocity) and every upcoming cycle, with their issues.</dd>
+        )}
       </dl>
       <div className="row">
         <button className="btn btn-primary" onClick={() => pull.mutate()} disabled={pull.isPending}>
@@ -107,7 +118,7 @@ export function OooCard() {
       </p>
       <dl className="facts">
         <dt>Current file</dt>
-        <dd>{ooo ? `${ooo.fileName}${ooo.generated ? ' (generated demo data)' : ''}` : 'none imported'}</dd>
+        <dd>{ooo ? `${ooo.fileName}${ooo.generated ? ' (bundled sample)' : ''}` : 'none imported'}</dd>
         {ooo && (
           <>
             <dt>Imported</dt>

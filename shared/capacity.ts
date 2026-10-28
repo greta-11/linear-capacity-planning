@@ -8,6 +8,9 @@ import type { Cycle, Day, Issue, OooDataset, OooEntry, Person, PlannerState, Pro
 //   4. utilization = planned load ÷ plannable
 // Planned load = cycle work + unscheduled work spread to its due/target date, each issue
 // counted at its remaining share by status (e.g. In Progress = 50%).
+// Periods can start in the past (at the earliest open issue's cycle). A cycle under way
+// then carries its whole commitment: work already done (completed issues, and the done
+// share of started ones) is spread over the elapsed days, remaining work over the rest.
 
 export type Status = 'none' | 'under' | 'healthy' | 'at-risk' | 'over';
 
@@ -46,7 +49,7 @@ export interface AllocationInfo {
   plannedPoints: Record<string, number>;
 }
 
-export type LoadKind = 'planned' | 'unplanned' | 'unscheduled';
+export type LoadKind = 'planned' | 'unplanned' | 'unscheduled' | 'done';
 
 export interface LoadItem {
   issueId: string;
@@ -56,13 +59,13 @@ export interface LoadItem {
   cycleId: string | null;
   projectId: string | null;
   kind: LoadKind;
-  /** Remaining points falling inside the window. */
+  /** Points falling inside the window (remaining work, or for `done`, work already done). */
   points: number;
   /** Estimate (or team median when unestimated). */
   fullPoints: number;
-  /** Share still to do, from the issue's status. */
+  /** Share still to do, from the issue's status (for `done`, the share already done). */
   weight: number;
-  /** fullPoints × weight. */
+  /** fullPoints × weight: all points of this part of the issue, inside the window or not. */
   remainingPoints: number;
   unestimated: boolean;
   /** For unscheduled work: where its end date came from. */
@@ -75,6 +78,8 @@ export interface TeamLoad {
   planned: number;
   unplanned: number;
   unscheduled: number;
+  /** Work already done in a cycle under way, on its elapsed days. */
+  done: number;
 }
 
 export interface PersonWindow {
@@ -128,6 +133,7 @@ export interface TeamWindow {
   planned: number;
   unplanned: number;
   unscheduled: number;
+  done: number;
   /** Of the load above, what has no assignee. */
   unassigned: number;
   load: number;
@@ -178,6 +184,8 @@ export interface CapacityModel {
   spreadOf(issueId: string): Spread | null;
   /** Remaining points of an issue that fall in a window. */
   issuePoints(issueId: string, start: Day, end: Day): number;
+  /** Work already done on an issue in its current cycle, spread over the cycle's elapsed days. */
+  doneSpreadOf(issueId: string): Spread | null;
   isCompletedCycle(cycle: Cycle): boolean;
   isActiveCycle(cycle: Cycle): boolean;
   completedCyclesOf(teamId: string): Cycle[];
@@ -237,7 +245,7 @@ function median(values: number[]): number | null {
 }
 
 export function teamLoadTotal(l: TeamLoad): number {
-  return l.planned + l.unplanned + l.unscheduled;
+  return l.planned + l.unplanned + l.unscheduled + l.done;
 }
 
 export function round1(n: number): number {
@@ -248,7 +256,8 @@ export function buildModel(input: CapacityInput): CapacityModel {
   const { snapshot, planner, today } = input;
   const settings = { ...DEFAULT_SETTINGS, ...planner.settings, statusWeights: { ...DEFAULT_SETTINGS.statusWeights, ...planner.settings.statusWeights } };
   const workDays = settings.workDays;
-  const from = maxDay(input.range.from, today);
+  // The range may start before today; past days count in full (see the header).
+  const from = input.range.from;
   const to = input.range.to;
   const bufferPct = Math.min(0.9, Math.max(0, input.bufferPct ?? DEFAULT_BUFFER));
 
@@ -427,13 +436,23 @@ export function buildModel(input: CapacityInput): CapacityModel {
     }
   }
 
-  // --- Spread of remaining work over working days -------------------------
+  // --- Spread of work over working days ----------------------------------
   // Cycle work is spread over the cycle's remaining working days. Work with no cycle is
   // spread from today to its due date, or else its project's target date (over the
   // current week when that date has passed). Work with no date at all isn't load.
+  // In a cycle under way, work already done is spread over the elapsed days.
   const spreads: Spread[] = [];
   const spreadById = new Map<string, Spread>();
-  const addSpread = (issue: Issue, cycle: Cycle | null, start: Day, end: Day, kind: LoadKind, extra: { dateSource?: 'due' | 'project'; overdue?: boolean } = {}) => {
+  const doneById = new Map<string, Spread>();
+  const yesterday = addDays(today, -1);
+  const addSpread = (
+    issue: Issue,
+    cycle: Cycle | null,
+    start: Day,
+    end: Day,
+    kind: LoadKind,
+    extra: { dateSource?: 'due' | 'project'; overdue?: boolean; weight?: number } = {},
+  ) => {
     let days = countWorkingDays(start, end, workDays);
     const noWorkDays = days === 0;
     if (noWorkDays) {
@@ -441,15 +460,21 @@ export function buildModel(input: CapacityInput): CapacityModel {
       days = 1;
     }
     const { points: fullPoints, unestimated } = pointsOf(issue);
-    const weight = statusWeight(issue);
+    const weight = extra.weight ?? statusWeight(issue);
+    if (kind === 'done' && fullPoints * weight <= 0) return;
     const s: Spread = { issue, cycle, start, end, days, fullPoints, weight, points: fullPoints * weight, unestimated, kind, overdue: !!extra.overdue, dateSource: extra.dateSource, noWorkDays };
     spreads.push(s);
-    spreadById.set(issue.id, s);
+    (kind === 'done' ? doneById : spreadById).set(issue.id, s);
   };
   for (const i of snapshot.issues) {
+    const c = i.cycleId ? cycles.get(i.cycleId) : undefined;
+    // Done work in a cycle under way: completed issues in full, started ones by their done share.
+    if (c && !isCompletedCycle(c) && c.startDate < today && countWorkingDays(c.startDate, yesterday, workDays) > 0) {
+      if (i.stateType === 'completed') addSpread(i, c, c.startDate, yesterday, 'done', { weight: 1 });
+      else if (isOpen(i)) addSpread(i, c, c.startDate, yesterday, 'done', { weight: 1 - statusWeight(i) });
+    }
     if (!isOpen(i)) continue;
     if (i.cycleId) {
-      const c = cycles.get(i.cycleId);
       if (!c || isCompletedCycle(c)) continue;
       addSpread(i, c, maxDay(c.startDate, today), c.endDate, unplannedKind(i));
       continue;
@@ -537,7 +562,7 @@ export function buildModel(input: CapacityInput): CapacityModel {
     const bufferPoints = available * bufferPct;
     const plannable = available - bufferPoints;
     const loadByTeam: Record<string, TeamLoad> = {};
-    const bucket = (t: string) => (loadByTeam[t] ??= { planned: 0, unplanned: 0, unscheduled: 0 });
+    const bucket = (t: string) => (loadByTeam[t] ??= { planned: 0, unplanned: 0, unscheduled: 0, done: 0 });
     for (const t of person.teamIds) bucket(t);
     const items: LoadItem[] = [];
     for (const s of spreadsByAssignee.get(personId) ?? []) {
@@ -595,6 +620,7 @@ export function buildModel(input: CapacityInput): CapacityModel {
       const s = spreadById.get(id);
       return s ? portion(s, start, end) : 0;
     },
+    doneSpreadOf: (id) => doneById.get(id) ?? null,
     isCompletedCycle,
     isActiveCycle,
     completedCyclesOf,
@@ -646,11 +672,13 @@ export function teamWindow(model: CapacityModel, teamId: string, start: Day, end
   let planned = 0;
   let unplanned = 0;
   let unscheduled = 0;
+  let done = 0;
   let unassigned = 0;
   const byProject: TeamWindow['byProject'] = {};
   for (const i of items) {
     if (i.kind === 'unplanned') unplanned += i.points;
     else if (i.kind === 'unscheduled') unscheduled += i.points;
+    else if (i.kind === 'done') done += i.points;
     else planned += i.points;
     if (!i.assigneeId) unassigned += i.points;
     const key = i.projectId ?? 'none';
@@ -658,7 +686,7 @@ export function teamWindow(model: CapacityModel, teamId: string, start: Day, end
     p.points += i.points;
     p.issueIds.push(i.issueId);
   }
-  const load = planned + unplanned + unscheduled;
+  const load = planned + unplanned + unscheduled + done;
   return {
     start,
     end,
@@ -672,6 +700,7 @@ export function teamWindow(model: CapacityModel, teamId: string, start: Day, end
     planned,
     unplanned,
     unscheduled,
+    done,
     unassigned,
     load,
     ...classify(load, plannable, settings),
@@ -686,4 +715,20 @@ export function teamWindow(model: CapacityModel, teamId: string, start: Day, end
 /** Today through the Sunday ending the 12th week. */
 export function defaultRange(today: Day): { from: Day; to: Day } {
   return { from: today, to: addDays(weekStart(today), 7 * 12 - 1) };
+}
+
+/**
+ * Where the heat map's first period starts: the start of the earliest cycle that still
+ * holds open work, even when that's in the past. Today when no open issue is in a cycle.
+ */
+export function planningStart(snapshot: Snapshot, today: Day): Day {
+  const cycles = new Map(snapshot.cycles.map((c) => [c.id, c]));
+  let start = today;
+  for (const i of snapshot.issues) {
+    if (!isOpen(i) || !i.cycleId) continue;
+    const c = cycles.get(i.cycleId);
+    if (!c || c.completedAt != null || c.endDate < today) continue;
+    if (c.startDate < start) start = c.startDate;
+  }
+  return start;
 }

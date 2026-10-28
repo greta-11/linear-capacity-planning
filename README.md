@@ -4,13 +4,14 @@ A local web app for Linear teams that answers three questions:
 
 1. **Can we trust the data?** **Data hygiene** counts open issues the planner can't use well: no date, no estimate, or no project. A banner on every tab points you to fix them directly in Linear.
 2. **Where are we overcommitted, and why?** A **capacity heat map** of people and projects, grouped by team, over configurable periods. Click any cell to see the capacity math and what makes up the load.
-3. **What can we do about it?** **Recommendations** suggest reassignments within a team, each with its rationale, and flag the overflow that no reassignment can fix. They're read-only: you make the changes in Linear.
+3. **What can we do about it?** Each heat map cell's drawer has **recommendations**: reassignments within a team, each with its rationale and evidence, plus the overflow that no reassignment can fix. They're read-only: you make the changes in Linear.
 
 Data sources, shown in the strip at the top of the app, each with its own **Sync** button:
-- **Linear**, through the GraphQL API: teams, members, cycles, projects, issues and issue history.
+- **Linear**, through the GraphQL API. By default the planner syncs one saved view, [GX capacity planning demo subset](https://linear.app/rideshare-company/view/gx-capacity-planning-demo-subset-30b9a718498a), with its teams, their members, cycles, projects and issue history (see [Which Linear issues are planned](#which-linear-issues-are-planned)).
 - **Workday OOO**, from a CSV export. There is no live Workday connection: **Sync** re-reads and re-validates the imported export, and **Import CSV** loads a new one.
 
 Without an API key it runs on a generated demo workspace, so you can try it right away.
+
 ---
 
 ## Quick start
@@ -48,7 +49,29 @@ export LINEAR_API_KEY=lin_api_xxxxxxxxxxxxxxxx
 npm run check:linear
 ```
 
-4. Restart the app (`Ctrl+C`, then `npm run dev`). The Linear card switches to **Live**. Click **Sync** on the Linear card at any time to re-pull.
+4. Restart the app (`Ctrl+C`, then `npm run dev`). The Linear card switches to **Live** and names the view it syncs. Click **Sync** on the Linear card at any time to re-pull.
+
+### Which Linear issues are planned
+
+With an API key, the planner syncs the issues in one saved Linear **issue view**. The default is the GX capacity planning demo subset view:
+
+```
+https://linear.app/rideshare-company/view/gx-capacity-planning-demo-subset-30b9a718498a
+```
+
+- **Load and Data hygiene** come from the view's issues only, including completed ones (the view shows completed issues and sub-issues).
+- **Capacity** counts every member of each team that has an issue in the view, so teammates with no work in the view show as under-utilized.
+- **Velocity** uses each person's completed issues in their teams' recent cycles, inside the view or not, because throughput isn't limited to the view.
+- **Projects** are the ones the view's issues belong to.
+
+To plan a different view, or the whole workspace, set `LINEAR_VIEW` in `.env` (a view URL, slug or ID, or `all`), then restart and **Sync**:
+
+```bash
+echo 'LINEAR_VIEW=https://linear.app/your-team/view/your-view-0123456789ab' >> .env
+echo 'LINEAR_VIEW=all' >> .env   # whole workspace, as before
+```
+
+The API key must belong to the workspace that owns the view.
 
 ### Provide OOO data (CSV)
 
@@ -69,12 +92,15 @@ ivan@acme.dev,2026-11-16,2026-11-20,training,0.5,Mornings only
 | `fraction` | Share of each day that is out. Optional; defaults to `1`. Use `0.5` for half days. |
 | `note` | Optional. |
 
-Import it from the terminal:
+**OOO for the default view.** `samples/ooo-gx-capacity-demo.csv` is an OOO export for the people in the GX capacity planning demo view: vacations (some during Cycle 8, which started Oct 15), sick days, half-day training, and company holidays on Nov 26–27 and Dec 24–25. With an API key and the default view, the planner loads it automatically until you import your own CSV; the Workday card labels it **(sample)**. Demo mode keeps its own generated OOO data.
+
+Import a CSV from the terminal:
 
 ```bash
-# start from the template, or try the sample that matches the demo workspace
+# start from the template, or try a sample
 cp samples/ooo-template.csv my-ooo.csv
-npm run import:ooo -- samples/ooo-sample.csv
+npm run import:ooo -- samples/ooo-gx-capacity-demo.csv   # the default Linear view's people
+npm run import:ooo -- samples/ooo-sample.csv             # the demo workspace's people
 
 # your real export (validate first with --dry-run if you like)
 npm run import:ooo -- ~/Downloads/ooo-export.csv --dry-run
@@ -119,14 +145,17 @@ While any issue is flagged, a banner under the data strip says how many need cle
 
 *Who and which teams are over capacity, in which period, and why?*
 
-- **Columns** are periods of *x* **weeks, months or quarters**: for example 2 weeks × 6, or 1 quarter × 4. Weeks start on Monday, months on the 1st, quarters in Jan/Apr/Jul/Oct, and the first period starts today.
-- **Cells** show utilization (planned load ÷ plannable capacity), tinted by status. A ring marks periods with OOO.
+- **Columns** are periods of *x* **weeks, months or quarters**: for example 2 weeks × 6, or 1 quarter × 4.
+  - The first period starts on the **start date of the earliest cycle that still has open work**, even if that's in the past. In the default view that's FN Cycle 8, which started Oct 15. With no open cycle work, it starts today.
+  - Week periods step on from there (2-week periods line up with 2-week cycles). Month and quarter periods end on calendar boundaries.
+  - The column that contains today is marked **in progress**. It counts the **full period**: past days add to capacity, and work already done in the cycle adds to load (see [How capacity is calculated](#how-capacity-is-calculated)).
+- **Cells** show utilization (planned load ÷ plannable capacity), tinted by status. A ring marks periods with OOO. **↔n** marks a cell with *n* suggested reassignments, and **⚑** one that is still over capacity after reassignment. A line above the table counts both.
 - **Individuals | Projects** toggle. Both views are grouped by team, and each team row compares the team's load with its plannable capacity.
   - **Individuals:** teams expand into their people. Person rows show the person's whole load across all teams and projects. People on several teams appear under each team with an "also on …" chip.
   - **Projects:** teams expand into their projects, plus "No project". A project cell is that project's load for the team in the period ÷ the team's plannable capacity, so a team's project rows add up to the team row. Project cells use a neutral tint, since a single project isn't "over" on its own.
   - Groups start collapsed. Expand one with its ▸ toggle, or use **Expand all teams** / **Collapse all**. A collapsed team still says how many of its people are over capacity.
 - **Filters** for projects, teams and people, plus **capacity type** (Over / At risk / Healthy / Under). The capacity type filter keeps a row when any period in view has that status, so you can go straight to the over-capacity rows. Any person, project or capacity type filter expands the groups while it's active.
-- **Buffer %** (default 10%) is held back from every person's available capacity, for unplanned work, meetings and support. One value applies to everyone, and Recommendations use it too.
+- **Buffer %** (default 10%) is held back from every person's available capacity, for unplanned work, meetings and support. One value applies to everyone, and recommendations use it too.
 - **Velocity** (applies to every tab):
 
   | Mode | How each person's points per working day are set |
@@ -139,29 +168,39 @@ While any issue is flagged, a banner under the data strip says how many need cle
 - **Click any cell** to open a drawer:
   - **Person cell:**
     - the capacity steps: baseline → − OOO → available → − buffer → plannable, with the OOO rows from the CSV
-    - what makes up the load: cycle work, work added mid-cycle, unscheduled work (spread to a due date or project target)
+    - what makes up the load: cycle work, work added mid-cycle, unscheduled work (spread to a due date or project target), and work done earlier in a cycle under way
     - the load broken down by team and by project
-    - every issue in the period, sorted by priority, with its status weight and the share of its points that falls in that period
     - **How this is calculated** notes using this cell's numbers, e.g. "PLT-12 · 5 pts × 50% (In Progress) = 2.5 remaining"
-  - **Team cell:** where the capacity went (members' full time − absences − time on other teams − buffer), what the team is asked to carry, its members and its issues.
-  - **Project cell:** the project's issues for that team in the period, and its share of the team's plannable capacity.
+    - **Recommendations** for this person in this period
+    - every issue in the period, sorted by priority, with its status weight and the share of its points that falls in that period
+  - **Team cell:** where the capacity went (members' full time − absences − time on other teams − buffer), what the team is asked to carry, **recommendations** (the team's reassignments and remaining overflow), its members and its issues.
+  - **Project cell:** its share of the team's plannable capacity, **recommendations** that move this project's issues (and the team's overflow when this project drives it), who is doing the work, and its issues.
+  - The **Members**, **Issues**, **Recommendations** and **Who is doing it** sections each have a ▾/▸ toggle to collapse or expand them. The browser remembers your choice.
 
-### Recommendations
+### Recommendations (in the cell drawer)
 
 *What can we change, and what needs a scope or timeline decision?*
 
-Recommendations use the heat map's periods, buffer and velocity (shown at the top of the tab, with a link to change them) and have their own team filter. They are suggestions only: make the changes in Linear, then **Sync**.
+Recommendations use the heat map's periods, buffer and velocity. They are suggestions only: make the changes in Linear, then **Sync**. They're worked out once for every period in view, then each drawer shows the ones for its person, team or project. A period that started in the past (the **in progress** column) is judged on its **remaining days**, since work already done can't be moved.
 
 **Reassignments.** For each period in order, and each person over plannable capacity (most over first), the planner moves their not-started issues (triage, backlog, todo), lowest priority first, to the teammate with the most headroom. A teammate can take an issue only if:
 
 - they're on the **same team** as the issue
 - they stay within plannable capacity over the issue's **cycle** (or, with no cycle, the window it's spread over)
 - they stay within plannable capacity **this period**
-- they aren't pushed over plannable capacity **next period**
+- they aren't pushed over plannable capacity **next period**, or in any other period the issue's work reaches
 
 It keeps going until the person is at or under 100%, or nothing more fits. Work already in progress or in review is never moved. Each card shows the issue, from → to, the points in this period (and in total, if the issue spans periods) and the rationale, e.g. "Sid has 6 pts of headroom this period and 4 next; they'd be at 92% this period and 88% next. Ana goes from 130% to 104%."
 
-People still over capacity afterwards are listed in the same period with the reason, rather than left out:
+**Show evidence** on a card opens what the suggestion was built from:
+- **Trigger:** the from-person's load vs plannable capacity, e.g. "Ana in Oct 28 – Nov 1: 7.4 pts remaining load vs 3.4 pts plannable = 218% · over above 100%".
+- **Constraints checked:** each of the four constraints above, with the recipient's numbers, e.g. "Within limit this period: 2.1 + 0.8 = 2.9 ≤ 4.1 pts plannable".
+- **Why this issue and this teammate:** its status and priority, and how many teammates were considered.
+- **Inputs:** both people's velocity (and where it came from), working days, OOO days, buffer, plannable capacity and current load.
+- **Source rows:** the Linear issue, and both people's OOO CSV rows (file and row number).
+- **Freshness:** when Linear was last synced and when the OOO data was loaded.
+
+People still over capacity afterwards are listed with the reason and their teammates' headroom, rather than left out:
 - "no Platform teammate has headroom this period"
 - "teammates with room this period would go over capacity next period"
 - "teammates with room this period would go over capacity within the issue's cycle"
@@ -176,7 +215,7 @@ People still over capacity afterwards are listed in the same period with the rea
 
 ## How capacity is calculated
 
-Everything is in **estimate points**. Teams with estimates turned off count each issue as 1 point. All figures are computed **from today forward**.
+Everything is in **estimate points**. Teams with estimates turned off count each issue as 1 point. Periods start at the earliest open issue's cycle, so the first one can start in the past; it counts the **full period** (capacity and load), while recommendations look only at its remaining days.
 
 **Capacity**, per person and period, in this order:
 
@@ -201,6 +240,7 @@ Everything is in **estimate points**. Teams with estimates turned off count each
   | In Review (a started state whose name contains "review") | 25% |
 
 - **Cycle work:** an issue's remaining points are spread evenly over the remaining working days of its cycle, and each period picks up the share that falls inside it. An issue that entered its cycle after the cycle's first day is shown as *added mid-cycle* (from Linear issue history; falls back to the creation date).
+- **Done in cycle:** in a cycle under way, the work already done goes on its elapsed working days (cycle start to yesterday): completed issues at their full estimate, plus the done share of started issues (e.g. the other 50% of an In Progress issue). Each issue therefore counts its full estimate across the cycle. Canceled issues don't count.
 - **Unscheduled work:** open issues with no cycle are spread from today to their **due date**, or else their project's **target date**. If that date has passed, they go on the current week. Issues with no date at all aren't load; they're flagged under Data hygiene.
 - Unestimated issues count at the team's median estimate and are flagged.
 
@@ -215,7 +255,7 @@ Everything is in **estimate points**. Teams with estimates turned off count each
 
 ## Linear API limits
 
-Linear caps every GraphQL query at **10,000 complexity points**, separately from the hourly budget (3,000,000 points for a personal API key). Complexity is scored from the page sizes a query *requests*, not the data it returns, so a small workspace can still hit the cap. The planner keeps each query to one large page and fetches nested lists, such as each team's members, in their own paginated queries. The largest query is about 2,600 points. `npm test` estimates every query and fails if one goes over 5,000.
+Linear caps every GraphQL query at **10,000 complexity points**, separately from the hourly budget (3,000,000 points for a personal API key). Complexity is scored from the page sizes a query *requests*, not the data it returns, so a small workspace can still hit the cap. The planner keeps each query to one large page and fetches nested lists, such as each team's members, in their own paginated queries. The largest query is about 2,600 points, and the view's issue query about the same. `npm test` estimates every query and fails if one goes over 5,000.
 
 ## Commands
 
@@ -223,16 +263,16 @@ Linear caps every GraphQL query at **10,000 complexity points**, separately from
 |---|---|
 | `npm run dev` | API server on `127.0.0.1:4000` plus the UI on `127.0.0.1:5173` (hot reload) |
 | `npm run build && npm start` | Production build, served from `http://127.0.0.1:4000` |
-| `npm run check:linear` | Verify `LINEAR_API_KEY` and summarise what a sync would pull (teams, cycles, issues, projects) |
+| `npm run check:linear` | Verify `LINEAR_API_KEY`, show which view is synced, and summarise what a sync would pull (view issues, teams, cycles, projects) |
 | `npm run import:ooo -- <file.csv> [--dry-run]` | Validate and import an OOO CSV |
-| `npm test` | Unit tests (capacity engine, data hygiene, reassignments, CSV parsing, query complexity) |
+| `npm test` | Unit tests (capacity engine, periods, data hygiene, reassignments and evidence, view sync, CSV parsing, query complexity) |
 | `npm run typecheck` | TypeScript across server, client and tests |
 
 Local state lives in `data/` (gitignored):
 
 | File | Contents |
 |---|---|
-| `snapshot.json` | Last Linear sync |
+| `snapshot.json` | Last Linear sync (re-pulled when `LINEAR_VIEW` changes) |
 | `ooo.json` | Last imported CSV |
 | `planner.json` | Planner settings (work days, default velocity, thresholds, status weights) |
 | `sync-history.json` | Recent syncs |
@@ -250,12 +290,12 @@ shared/        Pure TypeScript used by server and browser
   hygiene.ts          data hygiene flags (no date, no estimate, no project)
   reassign.ts         reassignments and remaining overflow
 server/        Express API (binds to 127.0.0.1 only)
-  linear/             GraphQL client (pagination, rate-limit retries), queries, normalisation
+  linear/             GraphQL client (pagination, rate-limit retries), queries, view config (view.ts), normalisation
   ooo/csv.ts          CSV parse/validate/diff/export
   demo/               demo workspace generator
   service.ts          sync and snapshot loading
 scripts/       check-linear.ts, import-ooo.ts
 client/        Vite + React UI
-samples/       ooo-sample.csv (matches the demo workspace), ooo-template.csv
+samples/       ooo-gx-capacity-demo.csv (the default Linear view's people), ooo-sample.csv (the demo workspace), ooo-template.csv
 tests/         Vitest
 ```
