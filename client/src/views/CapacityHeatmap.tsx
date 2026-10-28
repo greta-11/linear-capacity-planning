@@ -76,7 +76,7 @@ export function CapacityHeatmap() {
         const teamCells = buckets.map((b) => teamWindow(model, team.id, b.start, b.end));
         const allPeople = team.memberIds
           .map((id) => model.people.get(id)!)
-          .filter((p) => p?.active)
+          .filter((p) => p && model.inPlan(p.id))
           .filter((p) => !peopleFilter.size || peopleFilter.has(p.id))
           .filter((p) => !projectSet.size || projectPeople.has(p.id))
           .map((person) => ({ person, cells: buckets.map((b) => model.personWindow(person.id, b.start, b.end)) }));
@@ -138,6 +138,7 @@ export function CapacityHeatmap() {
           <strong>{teamOverflowCount}</strong> team period{teamOverflowCount === 1 ? '' : 's'} over capacity after reassignment (need a scope or timeline decision). Cells marked{' '}
           <span className="cell-rec">↔</span> or <span className="cell-rec cell-rec-flag">⚑</span> have recommendations: click one to see them, with their evidence.
         </p>
+        <IdleNote />
         <p className="lede">
           {h.mode === 'people'
             ? "Each cell is a person's planned load as a % of their plannable capacity for that period (all their teams and projects). Team rows compare the team's work with its members' plannable time on that team."
@@ -311,6 +312,32 @@ export function CapacityHeatmap() {
   );
 }
 
+/** Who is left out because they have no planned work in any period in view. */
+function IdleNote() {
+  const { model } = usePlanner();
+  const idle = [...model.idlePeople].map((id) => model.people.get(id)!).filter((p) => p.teamIds.length);
+  if (!idle.length) return null;
+  const byTeam = [...model.teams.values()]
+    .map((t) => ({ team: t, names: idle.filter((p) => p.teamIds.includes(t.id)).map((p) => p.name) }))
+    .filter((x) => x.names.length);
+  return (
+    <details className="small idle-note" data-testid="idle-note">
+      <summary>
+        <strong>{idle.length}</strong> {idle.length === 1 ? 'person has' : 'people have'} no planned work in these periods (0% in every column), so they're left out of the rows, team capacity and
+        recommendations.
+      </summary>
+      <ul className="plain">
+        {byTeam.map((x) => (
+          <li key={x.team.id}>
+            <span className="muted">{x.team.name}:</span> {x.names.join(', ')}
+          </li>
+        ))}
+      </ul>
+      <p className="muted">They show up again as soon as they have assigned work in a period in view, e.g. after an assignment in Linear and a Sync, or with more columns.</p>
+    </details>
+  );
+}
+
 function velocityText(model: CapacityModel, personId: string) {
   const v = model.velocity.get(personId)!;
   const perWeek = v.value * model.input.planner.settings.workDays.length;
@@ -326,7 +353,7 @@ function Toolbar() {
   const snapshot = state.snapshot!;
   const periodName = h.size === 1 ? UNIT_LABEL[h.unit] : `${h.size}-${UNIT_LABEL[h.unit]}`;
   const workDaysPerWeek = model.input.planner.settings.workDays.length;
-  const shownPeople = [...model.people.values()].filter((p) => p.active && p.teamIds.length);
+  const shownPeople = [...model.people.values()].filter((p) => model.inPlan(p.id) && p.teamIds.length);
   const avgPerWeek = shownPeople.length ? (shownPeople.reduce((a, p) => a + model.velocity.get(p.id)!.value, 0) / shownPeople.length) * workDaysPerWeek : 0;
   const perWeek = v.kind === 'manual' ? v.pointsPerWeek : avgPerWeek;
   const perPeriod = perWeek * WEEKS_PER[h.unit] * h.size;

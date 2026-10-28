@@ -135,7 +135,7 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
   const unresolved: Unresolved[] = [];
 
   const eligible = (teamId: string) =>
-    model.teams.get(teamId)!.memberIds.filter((id) => model.people.get(id)?.active && (model.allocation.get(id)!.shares[teamId] ?? 0) > 0);
+    model.teams.get(teamId)!.memberIds.filter((id) => model.inPlan(id) && (model.allocation.get(id)!.shares[teamId] ?? 0) > 0);
   const primaryTeam = (personId: string) => {
     const shares = model.allocation.get(personId)!.shares;
     return [...model.people.get(personId)!.teamIds].sort((a, b) => (shares[b] ?? 0) - (shares[a] ?? 0))[0];
@@ -148,7 +148,7 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
     // Everyone over plannable capacity this period, most over first. People on several
     // teams are handled once; each issue can only move within its own team.
     const over = [...model.people.values()]
-      .filter((p) => p.active && p.teamIds.length)
+      .filter((p) => model.inPlan(p.id) && p.teamIds.length)
       .map((p) => ({ id: p.id, ...loadOf(p.id, bucket.start, bucket.end) }))
       .filter((m) => m.load > m.plannable + EPS)
       .sort((a, b) => b.load - b.plannable - (a.load - a.plannable));
@@ -318,7 +318,7 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
       const tw = teamWindow(model, team.id, bucket.start, bucket.end);
       const teamOverBy = tw.load - tw.plannable;
       const peopleOver = team.memberIds
-        .filter((id) => model.people.get(id)?.active)
+        .filter((id) => model.inPlan(id))
         .map((id) => {
           const l = loadOf(id, bucket.start, bucket.end);
           return { personId: id, overBy: l.load - l.plannable };

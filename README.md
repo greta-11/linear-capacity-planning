@@ -60,7 +60,7 @@ https://linear.app/rideshare-company/view/gx-capacity-planning-demo-subset-30b9a
 ```
 
 - **Load and Data hygiene** come from the view's issues only, including completed ones (the view shows completed issues and sub-issues).
-- **Capacity** counts every member of each team that has an issue in the view, so teammates with no work in the view show as under-utilized.
+- **Capacity** counts the members of each team that has an issue in the view, except people with no planned work in any period in view (see [People with no planned work](#people-with-no-planned-work)).
 - **Velocity** uses each person's completed issues in their teams' recent cycles, inside the view or not, because throughput isn't limited to the view.
 - **Projects** are the ones the view's issues belong to.
 
@@ -154,6 +154,7 @@ While any issue is flagged, a banner under the data strip says how many need cle
   - **Individuals:** teams expand into their people. Person rows show the person's whole load across all teams and projects. People on several teams appear under each team with an "also on …" chip.
   - **Projects:** teams expand into their projects, plus "No project". A project cell is that project's load for the team in the period ÷ the team's plannable capacity, so a team's project rows add up to the team row. Project cells use a neutral tint, since a single project isn't "over" on its own.
   - Groups start collapsed. Expand one with its ▸ toggle, or use **Expand all teams** / **Collapse all**. A collapsed team still says how many of its people are over capacity.
+- **People with no planned work** in any period in view (0% in every column) are left out of the rows, team capacity and recommendations, so they don't drag team utilization down. A note above the table lists them by team. They come back as soon as they have assigned work in a period in view.
 - **Filters** for projects, teams and people, plus **capacity type** (Over / At risk / Healthy / Under). The capacity type filter keeps a row when any period in view has that status, so you can go straight to the over-capacity rows. Any person, project or capacity type filter expands the groups while it's active.
 - **Buffer %** (default 10%) is held back from every person's available capacity, for unplanned work, meetings and support. One value applies to everyone, and recommendations use it too.
 - **Velocity** (applies to every tab):
@@ -243,6 +244,8 @@ Everything is in **estimate points**. Teams with estimates turned off count each
 - **Done in cycle:** in a cycle under way, the work already done goes on its elapsed working days (cycle start to yesterday): completed issues at their full estimate, plus the done share of started issues (e.g. the other 50% of an In Progress issue). Each issue therefore counts its full estimate across the cycle. Canceled issues don't count.
 - **Unscheduled work:** open issues with no cycle are spread from today to their **due date**, or else their project's **target date**. If that date has passed, they go on the current week. Issues with no date at all aren't load; they're flagged under Data hygiene.
 - Unestimated issues count at the team's median estimate and are flagged.
+
+<a id="people-with-no-planned-work"></a>**People with no planned work:** an active person with no load anywhere in the periods in view is left out of team capacity, the heat map rows and recommendations (they can't receive reassigned work). Counting them would make teams look emptier than they are. Someone with work in at least one period still counts in every period.
 
 **Shared commitments:**
 - A person's utilization covers all their teams.
