@@ -4,7 +4,7 @@ A local web app for Linear teams that answers three questions:
 
 1. **Can we trust the data?** **Data hygiene** counts open issues the planner can't use well: no date, no estimate, or no project. A banner on every tab points you to fix them directly in Linear.
 2. **Where are we overcommitted, and why?** A **capacity heat map** of people and projects, grouped by team, over configurable periods. Click any cell to see the capacity math and what makes up the load.
-3. **What can we do about it?** Each heat map cell's drawer has **recommendations**: reassignments within a team, each with its rationale and evidence, plus the overflow that no reassignment can fix. They're read-only: you make the changes in Linear.
+3. **What can we do about it?** Each heat map cell's drawer has **recommendations**: reassignments that spread the load within a team, cross-team borrows within a project, and the overflow that nothing can fix. Each card says exactly what to change and shows both people's utilization before and after, with its evidence. They're read-only: you make the changes in Linear.
 
 Data sources, shown in the strip at the top of the app, each with its own **Sync** button:
 - **Linear**, through the GraphQL API. By default the planner syncs one saved view, [GX capacity planning demo subset](https://linear.app/rideshare-company/view/gx-capacity-planning-demo-subset-30b9a718498a), with its teams, their members, cycles, projects and issue history (see [Which Linear issues are planned](#which-linear-issues-are-planned)).
@@ -149,11 +149,23 @@ While any issue is flagged, a banner under the data strip says how many need cle
   - The first period starts on the **start date of the earliest cycle that still has open work**, even if that's in the past. In the default view that's FN Cycle 8, which started Oct 15. With no open cycle work, it starts today.
   - Week periods step on from there (2-week periods line up with 2-week cycles). Month and quarter periods end on calendar boundaries.
   - The column that contains today is marked **in progress**. It counts the **full period**: past days add to capacity, and work already done in the cycle adds to load (see [How capacity is calculated](#how-capacity-is-calculated)).
-- **Cells** show utilization (planned load ÷ plannable capacity), tinted by status. A ring marks periods with OOO. **↔n** marks a cell with *n* suggested reassignments, and **⚑** one that is still over capacity after reassignment. A line above the table counts both.
-- **Individuals | Projects** toggle. Both views are grouped by team, and each team row compares the team's load with its plannable capacity.
-  - **Individuals:** teams expand into their people. Person rows show the person's whole load across all teams and projects. People on several teams appear under each team with an "also on …" chip.
-  - **Projects:** teams expand into their projects, plus "No project". A project cell is that project's load for the team in the period ÷ the team's plannable capacity, so a team's project rows add up to the team row. Project cells use a neutral tint, since a single project isn't "over" on its own.
-  - Groups start collapsed. Expand one with its ▸ toggle, or use **Expand all teams** / **Collapse all**. A collapsed team still says how many of its people are over capacity.
+- **Utilization is always aggregate:** a person's whole load ÷ their whole plannable capacity. A person's capacity is never split between their teams.
+- **Cells** show a big number with a small line beneath, tinted by status. A ring marks periods with OOO. Over-capacity cells add the gap in points ("+3.4 pts over"). **↔n** marks *n* suggested same-team reassignments, **⇄n** cross-team borrows, and **⚑** a cell still over capacity after them. A line above the table counts them.
+- **Individuals | Projects** toggle:
+  - **Individuals** has two sections:
+    - **Everyone:** one row per person with their overall utilization, most over first.
+    - **By team:** each team row reads "people at X%": everything its members carry (on any team) plus the team's unassigned work, ÷ their combined plannable capacity. Beneath it, "N% on this team" is the team's own work as a share of that capacity. Under a team, each person shows their **overall** % (the same number as in Everyone) with "N% on this team" beneath: their work on this team ÷ their whole capacity. A person's shares across their teams add up to their overall %. People over capacity overall get a red edge and an "⚠ over overall" chip. People on several teams appear under each, with an "also on …" chip.
+  - **Projects:** teams expand into their projects, plus "No project". A project cell reads "N pts · X%": the project's points on this team, and how loaded the people doing it are overall.
+  - Cells say what's going on instead of a bare number when there is one:
+
+    | Label | Meaning |
+    |---|---|
+    | **No work planned** | Nothing to do here this period (team rows add "people at X% elsewhere" when its members are busy on other teams) |
+    | **All OOO · N pts** | Work planned, but every member is out |
+    | **No capacity · N pts** | Work planned, but nobody on the team to do it |
+    | **Unassigned · N pts** | (Projects) the work here has no assignee yet |
+    | **Nothing planned** | No work and nobody to do it |
+  - Groups start collapsed. Expand one with its ▸ toggle, or use **Expand all teams** / **Collapse all**. A collapsed team still says how many of its people are over capacity overall.
 - **People with no planned work** in any period in view (0% in every column) are left out of the rows, team capacity and recommendations, so they don't drag team utilization down. A note above the table lists them by team. They come back as soon as they have assigned work in a period in view.
 - **Filters** for projects, teams and people, plus **capacity type** (Over / At risk / Healthy / Under). The capacity type filter keeps a row when any period in view has that status, so you can go straight to the over-capacity rows. Any person, project or capacity type filter expands the groups while it's active.
 - **Buffer %** (default 10%) is held back from every person's available capacity, for unplanned work, meetings and support. One value applies to everyone, and recommendations use it too.
@@ -174,8 +186,8 @@ While any issue is flagged, a banner under the data strip says how many need cle
     - **How this is calculated** notes using this cell's numbers, e.g. "PLT-12 · 5 pts × 50% (In Progress) = 2.5 remaining"
     - **Recommendations** for this person in this period
     - every issue in the period, sorted by priority, with its status weight and the share of its points that falls in that period
-  - **Team cell:** where the capacity went (members' full time − absences − time on other teams − buffer), what the team is asked to carry, **recommendations** (the team's reassignments and remaining overflow), its members and its issues.
-  - **Project cell:** its share of the team's plannable capacity, **recommendations** that move this project's issues (and the team's overflow when this project drives it), who is doing the work, and its issues.
+  - **Team cell:** the members' capacity (baseline − OOO − buffer), what they carry (this team's work and their work on other teams), **recommendations** (the team's reassignments, borrows and remaining overflow), its members (overall % and % on this team) and its issues.
+  - **Project cell:** the project's points and how loaded the people doing it are, **Teams on this project** (each team's project points, how loaded its people are, and its room up to 90%; a team "has room" at or under 90%), **recommendations** for this project's issues, including cross-team borrows (and the team's overflow when this project drives it), who is doing the work, and its issues.
   - The **Members**, **Issues**, **Recommendations** and **Who is doing it** sections each have a ▾/▸ toggle to collapse or expand them. The browser remembers your choice.
 
 ### Recommendations (in the cell drawer)
@@ -184,29 +196,35 @@ While any issue is flagged, a banner under the data strip says how many need cle
 
 Recommendations use the heat map's periods, buffer and velocity. They are suggestions only: make the changes in Linear, then **Sync**. They're worked out once for every period in view, then each drawer shows the ones for its person, team or project. A period that started in the past (the **in progress** column) is judged on its **remaining days**, since work already done can't be moved.
 
-**Reassignments.** For each period in order, and each person over plannable capacity (most over first), the planner moves their not-started issues (triage, backlog, todo), lowest priority first, to the teammate with the most headroom. A teammate can take an issue only if:
+**Reassignments spread the load**, even when everyone ends up over capacity. For each period in order, and each person over plannable capacity (most over first), the planner moves their not-started issues (triage, backlog, todo), lowest priority first, to whoever ends up least loaded. A move is made only if it **narrows the gap** between the two people:
 
-- they're on the **same team** as the issue
-- they stay within plannable capacity over the issue's **cycle** (or, with no cycle, the window it's spread over)
-- they stay within plannable capacity **this period**
-- they aren't pushed over plannable capacity **next period**, or in any other period the issue's work reaches
+- afterwards the recipient is within capacity, or no more over it than the donor, **this period** and in **every other period** (and the cycle or spread window) the issue's work reaches, and
+- the gap between them shrinks by at least 1 pt.
 
-It keeps going until the person is at or under 100%, or nothing more fits. Work already in progress or in review is never moved. Each card shows the issue, from → to, the points in this period (and in total, if the issue spans periods) and the rationale, e.g. "Sid has 6 pts of headroom this period and 4 next; they'd be at 92% this period and 88% next. Ana goes from 130% to 104%."
+Recipients who stay at or under **90%** ("has room") are preferred. Same-team moves come first; if none works, a **cross-team borrow** goes to someone on another team that works on the same project (teams with that project's work in view, plus the project's teams in Linear). Work already in progress or in review is never moved.
+
+Each card says exactly what to do and shows only the two people involved:
+
+```
+Reassign RIDE-7153 to anthony                    ⇄ Cross-team borrow
+Pet-friendly vehicle filter · 3 pts this period · Low · Todo
+             Before      After
+  sarah      ▲ 178%  →   ▲ 141%
+  anthony       23%  →      57%
+Needs agreement from both leads (Rider app and Rider Feedback Intake).
+```
+
+When both people are still over afterwards, the card says so: the move spreads the load, and a scope or timeline decision is needed too.
 
 **Show evidence** on a card opens what the suggestion was built from:
-- **Trigger:** the from-person's load vs plannable capacity, e.g. "Ana in Oct 28 – Nov 1: 7.4 pts remaining load vs 3.4 pts plannable = 218% · over above 100%".
-- **Constraints checked:** each of the four constraints above, with the recipient's numbers, e.g. "Within limit this period: 2.1 + 0.8 = 2.9 ≤ 4.1 pts plannable".
-- **Why this issue and this teammate:** its status and priority, and how many teammates were considered.
+- **Trigger:** the donor's load vs plannable capacity, e.g. "Ana in Oct 28 – Nov 1: 7.4 pts remaining load vs 3.4 pts plannable = 218% · over above 100%".
+- **Checks:** same team (or works on the same project), narrows the gap this period, narrows the gap in every period the issue reaches, and has room (≤ 90%), with each person's numbers. "Has room" shows as not met when the move only spreads the load.
+- **Why this issue and this person:** its status and priority, and how the recipient was picked.
 - **Inputs:** both people's velocity (and where it came from), working days, OOO days, buffer, plannable capacity and current load.
 - **Source rows:** the Linear issue, and both people's OOO CSV rows (file and row number).
 - **Freshness:** when Linear was last synced and when the OOO data was loaded.
 
-People still over capacity afterwards are listed with the reason and their teammates' headroom, rather than left out:
-- "no Platform teammate has headroom this period"
-- "teammates with room this period would go over capacity next period"
-- "teammates with room this period would go over capacity within the issue's cycle"
-- "only work already in progress remains in this period, which isn't moved"
-- "no remaining issue fits within a teammate's headroom"
+People still over capacity afterwards are listed in one line, e.g. "Still over after these moves: Ana +6.2 pts, Chen +3.2 pts. Needs a scope or timeline decision."
 
 **Remaining overflow.** After every reassignment is applied, each team and period still over capacity gets a flag (not a recommendation) with the points over plannable capacity, the projects driving the load, and the issues involved:
 - "Platform exceeds capacity by 8 pts in Nov 9 – Nov 22 after reassignment. Requires a scope or timeline decision."
@@ -247,10 +265,11 @@ Everything is in **estimate points**. Teams with estimates turned off count each
 
 <a id="people-with-no-planned-work"></a>**People with no planned work:** an active person with no load anywhere in the periods in view is left out of team capacity, the heat map rows and recommendations (they can't receive reassigned work). Counting them would make teams look emptier than they are. Someone with work in at least one period still counts in every period.
 
-**Shared commitments:**
-- A person's utilization covers all their teams.
-- In a team view, each member contributes their plannable capacity × their **time split** for that team. The split defaults to their historical completed points per team.
-- The rest shows as "time on other teams".
+**Teams and projects, with no time split:**
+- A person's utilization covers all their teams, and their capacity is never divided between them.
+- A **team** is measured on its people as a whole: everything its members carry (on any team) plus the team's unassigned work, ÷ their combined plannable capacity. People on several teams count in full on each. "N% on this team" is the team's own work ÷ that capacity.
+- A **project cell** is measured on the people doing that project's work on the team: everything they carry plus the project's unassigned work there, ÷ their plannable capacity.
+- **Has room** = at or under 90%.
 
 **Status:** under < 70% ≤ healthy ≤ 100% < at risk ≤ 115% < over. All thresholds are configurable.
 
