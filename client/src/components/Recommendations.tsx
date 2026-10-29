@@ -1,13 +1,16 @@
 import type { Bucket } from '../../../shared/calendar';
+import type { Status } from '../../../shared/capacity';
+import { classify } from '../../../shared/capacity';
 import type { Overflow, Reassignment, Unresolved } from '../../../shared/reassign';
 import { usePlanner } from '../context';
 import { ago, dateTime, formatRange, pct, pts } from '../format';
 import { VELOCITY_SOURCE_LABEL } from '../views/velocity';
-import { Empty, IssueLink, IssueTable, PersonName } from './ui';
+import { Empty, IssueLink, IssueTable, PersonName, PRIORITY_LABEL, STATUS_ICON } from './ui';
 
-// Recommendations for one heat map cell, read-only: reassignments to make in Linear, people
-// still over capacity and why, and the team's remaining overflow. Each reassignment keeps
-// its evidence: the trigger, every constraint it passed, the inputs and the source rows.
+// Recommendations for one heat map cell, read-only: reassignments and cross-team borrows to
+// make in Linear, people still over capacity, and the team's remaining overflow. Each card
+// says exactly what to do and shows the two people's utilization before and after; the
+// evidence (trigger, checks, inputs, source rows) sits behind "Show evidence".
 
 export type CellScope = { kind: 'person'; personId: string } | { kind: 'team'; teamId: string } | { kind: 'project'; teamId: string; projectKey: string };
 
@@ -28,11 +31,11 @@ export function CellRecommendations({ scope, bucket }: { scope: CellScope; bucke
     const teams = new Set(model.people.get(scope.personId)?.teamIds ?? []);
     overflow = stuck.length ? inBucket(plan.overflow).filter((o) => teams.has(o.teamId) && o.peopleOver.some((p) => p.personId === scope.personId)) : [];
   } else if (scope.kind === 'team') {
-    moves = inBucket(plan.reassignments).filter((r) => r.teamId === scope.teamId);
+    moves = inBucket(plan.reassignments).filter((r) => r.teamId === scope.teamId || r.toTeamId === scope.teamId);
     stuck = inBucket(plan.unresolved).filter((u) => model.teams.get(scope.teamId)?.memberIds.includes(u.personId));
     overflow = inBucket(plan.overflow).filter((o) => o.teamId === scope.teamId);
   } else {
-    moves = inBucket(plan.reassignments).filter((r) => r.teamId === scope.teamId && projectOf(r.issueId) === scope.projectKey);
+    moves = inBucket(plan.reassignments).filter((r) => (r.teamId === scope.teamId || r.toTeamId === scope.teamId) && projectOf(r.issueId) === scope.projectKey);
     overflow = inBucket(plan.overflow).filter(
       (o) => o.teamId === scope.teamId && o.projects.some((p) => (p.projectId ?? NO_PROJECT) === scope.projectKey && p.points > 0.05),
     );
@@ -60,27 +63,67 @@ export function CellRecommendations({ scope, bucket }: { scope: CellScope; bucke
   );
 }
 
+/** A utilization pill; "OOO" when the person has no capacity in the window. */
+function UtilPill({ u }: { u: number | null }) {
+  const { model } = usePlanner();
+  if (u == null) return <span className="pill pill-over">OOO</span>;
+  const status: Status = classify(u, 1, model.input.planner.settings).status;
+  return (
+    <span className={`pill pill-${status}`}>
+      {status === 'over' || status === 'at-risk' ? `${STATUS_ICON[status]} ` : ''}
+      {pct(u)}
+    </span>
+  );
+}
+
 function ReassignmentCard({ r }: { r: Reassignment }) {
   const { model } = usePlanner();
   const issue = model.issues.get(r.issueId)!;
+  const toName = model.people.get(r.to)?.name ?? 'Unknown';
   return (
-    <article className="rec rec-move" data-testid="reassignment">
-      <div className="rec-move-head">
-        <IssueLink id={r.issueId} /> <span className="rec-title-inline">{issue.title}</span>
+    <article className="rec rec-move rec-card" data-testid="reassignment" data-kind={r.kind}>
+      <div className="rec-card-head">
+        <h5 className="rec-headline">
+          Reassign <IssueLink id={r.issueId} /> to {toName}
+        </h5>
+        <span className={`rec-tag ${r.kind === 'borrow' ? 'rec-tag-borrow' : ''}`}>{r.kind === 'borrow' ? '⇄ Cross-team borrow' : 'Same team'}</span>
       </div>
-      <div className="rec-move-line">
-        <span className="move-from">
-          <PersonName id={r.from} />
-        </span>
-        <span aria-hidden>→</span>
-        <span className="move-to">
-          <PersonName id={r.to} />
-        </span>
-        <span className="chip">{pts(r.periodPoints)} pts this period</span>
-        {r.remainingPoints - r.periodPoints > 0.05 && <span className="chip">{pts(r.remainingPoints)} pts remaining in total</span>}
-        <span className="chip">{model.teamName(r.teamId)}</span>
+      <div className="rec-meta">
+        {issue.title} · {pts(r.periodPoints)} pts this period · {PRIORITY_LABEL[issue.priority] ?? 'No priority'} · {issue.stateName}
       </div>
-      <p className="rec-rationale">{r.rationale}</p>
+      <div className="before-after" role="table" aria-label="Utilization before and after">
+        <div role="row" className="ba-row ba-head">
+          <span role="columnheader" />
+          <span role="columnheader">Before</span>
+          <span role="columnheader" aria-hidden />
+          <span role="columnheader">After</span>
+        </div>
+        {[
+          { id: r.from, before: r.fromBefore, after: r.fromAfter },
+          { id: r.to, before: r.toBefore, after: r.toAfter },
+        ].map((p) => (
+          <div role="row" className="ba-row" key={p.id} data-testid="before-after-row">
+            <span role="rowheader">
+              <PersonName id={p.id} />
+            </span>
+            <span role="cell">
+              <UtilPill u={p.before} />
+            </span>
+            <span role="cell" aria-hidden>
+              →
+            </span>
+            <span role="cell">
+              <UtilPill u={p.after} />
+            </span>
+          </div>
+        ))}
+      </div>
+      {r.kind === 'borrow' && (
+        <p className="muted small">
+          Needs agreement from both leads ({model.teamName(r.teamId)} and {model.teamName(r.toTeamId)}).
+        </p>
+      )}
+      {r.bothStillOver && <p className="rec-both-over small">Spreads the load; both are still over, so a scope or timeline decision is needed too.</p>}
       <details className="evidence-toggle">
         <summary data-testid="evidence-toggle">Show evidence</summary>
         <ReassignmentEvidence r={r} />
@@ -112,12 +155,12 @@ function ReassignmentEvidence({ r }: { r: Reassignment }) {
         </div>
       </div>
       <div className="evidence-section">
-        <div className="muted small">Constraints checked</div>
+        <div className="muted small">Checks</div>
         <ul className="checks" data-testid="evidence-checks">
           {e.checks.map((c) => (
             <li key={c.label}>
-              <span className="check-ok" aria-hidden>
-                ✓
+              <span className={c.ok ? 'check-ok' : 'check-no'} aria-label={c.ok ? 'passed' : 'not met'}>
+                {c.ok ? '✓' : '–'}
               </span>{' '}
               <strong>{c.label}:</strong> {c.detail}
             </li>
@@ -184,35 +227,19 @@ function ReassignmentEvidence({ r }: { r: Reassignment }) {
 }
 
 /** People still over plannable capacity after the moves, with why and their teammates' headroom. */
+/** People still over plannable capacity after the moves: one line. */
 function StillOver({ list }: { list: Unresolved[] }) {
-  const { model } = usePlanner();
   return (
-    <div className="rec rec-stuck" data-testid="unresolved">
-      <div className="rec-move-head">
-        <strong>Still over capacity after reassignment</strong>
-      </div>
-      <ul className="stuck-list">
-        {list.map((u) => (
-          <li key={u.personId}>
-            <strong>
-              <PersonName id={u.personId} />
-            </strong>{' '}
-            over by {pts(u.overBy)} pts ({model.teamName(u.teamId)}): {u.reason}.
-            {u.teammates.length > 0 && (
-              <div className="muted small">
-                Teammates' headroom {formatRange(u.window.start, u.window.end)}:{' '}
-                {u.teammates
-                  .sort((a, b) => b.headroom - a.headroom)
-                  .slice(0, 6)
-                  .map((t) => `${model.people.get(t.personId)?.displayName ?? '?'} ${t.headroom >= 0 ? '+' : ''}${pts(t.headroom)}`)
-                  .join(' · ')}{' '}
-                pts
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <p className="rec-still-over small" data-testid="unresolved">
+      <strong>Still over after these moves:</strong>{' '}
+      {list.map((u, i) => (
+        <span key={u.personId} title={u.reason}>
+          {i > 0 && ', '}
+          <PersonName id={u.personId} /> +{pts(u.overBy)} pts
+        </span>
+      ))}
+      . Needs a scope or timeline decision.
+    </p>
   );
 }
 
@@ -229,7 +256,7 @@ function OverflowCard({ o }: { o: Overflow }) {
       <div className="grid-2 small">
         <div>
           <div className="muted">
-            {model.teamName(o.teamId)} · {formatRange(o.window.start, o.window.end)}: {pts(o.teamLoad)} pts planned ÷ {pts(o.teamPlannable)} pts plannable (
+            {model.teamName(o.teamId)} · {formatRange(o.window.start, o.window.end)}: its people carry {pts(o.teamLoad)} pts ÷ {pts(o.teamPlannable)} pts plannable (
             {pct(o.teamPlannable > 0 ? o.teamLoad / o.teamPlannable : null)})
           </div>
           {o.peopleOver.length > 0 && (
