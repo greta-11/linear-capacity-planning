@@ -343,6 +343,28 @@ function DeferEvidence({ d }: { d: Deferral }) {
           )}
         </ul>
       </div>
+      {d.kind === 'defer' && (
+        <div className="evidence-section" data-testid="who-could-take-it">
+          <div className="muted small">Who could take it</div>
+          {e.blocked.length ? (
+            <ul>
+              {e.blocked.map((b) => (
+                <li key={b.personId}>
+                  <PersonName id={b.personId} />: {b.detail}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="small">Nobody else is on the issue's team or on a team working on its project.</p>
+          )}
+        </div>
+      )}
+      {e.inProgressPoints > 0.05 && (
+        <p className="small">
+          {pts(e.inProgressPoints)} pts of <PersonName id={d.personId} />
+          's work this period is already in progress and isn't moved.
+        </p>
+      )}
       <div className="evidence-section">
         <div className="muted small">{model.teamName(d.teamId)} this period</div>
         <ul>

@@ -198,8 +198,10 @@ Recommendations use the heat map's periods, buffer and velocity. They are sugges
 
 **Reassignments spread the load**, even when everyone ends up over capacity. For each period in order, and each person over plannable capacity (most over first), the planner moves their not-started issues (triage, backlog, todo), lowest priority first, to whoever ends up least loaded. A move is made only if it **narrows the gap** between the two people:
 
-- afterwards the recipient is within capacity, or no more over it than the donor, **this period** and in **every other period** (and the cycle or spread window) the issue's work reaches, and
-- the gap between them shrinks by at least 1 pt.
+- **this period**, the gap between them shrinks by at least 1 pt, and the recipient ends within capacity or no more over it than the donor, and
+- **across the issue's cycle** (or, with no cycle, the window its work is spread over), the recipient ends within capacity or no more over it than the donor.
+
+**Relieving the current period comes first, judged on the cycle the work belongs to.** The cycle is the unit teams plan and commit in; heat map columns are a viewing choice. So a cycle whose last few days fall into the next column can still be moved to someone with room in that cycle, even if they're busy in the next column with other work, and changing the column size doesn't change what's suggested. Later overload isn't ignored: periods are handled in order, so the next period gets its own moves and defers.
 
 Recipients who stay at or under **90%** ("has room") are preferred. Same-team moves come first; if none works, a **cross-team borrow** goes to someone on another team that works on the same project (teams with that project's work in view, plus the project's teams in Linear). Work already in progress or in review is never moved.
 
@@ -231,13 +233,13 @@ Notes, at most one per card: the borrow agreement note; "Both still over; a scop
 
 **Show evidence** on a card opens what the suggestion was built from:
 - **Trigger:** the donor's load vs plannable capacity, e.g. "Ana in Oct 28 – Nov 1: 7.4 pts remaining load vs 3.4 pts plannable = 218% · over above 100%".
-- **Checks:** same team (or works on the same project), narrows the gap this period, narrows the gap in every period the issue reaches, and has room (≤ 90%), with each person's numbers. "Has room" shows as not met when the move only spreads the load.
+- **Checks:** same team (or works on the same project), narrows the gap this period, within capacity over the issue's cycle, and has room (≤ 90%), with each person's numbers. "Has room" shows as not met when the move only spreads the load.
 - **Why this issue and this person:** its status and priority, and how the recipient was picked.
 - **Inputs:** both people's velocity (and where it came from), working days, OOO days, buffer, plannable capacity and current load.
 - **Source rows:** the Linear issue, and both people's OOO CSV rows (file and row number).
 - **Freshness:** when Linear was last synced and when the OOO data was loaded.
 
-A defer card's evidence adds what deferring frees (this period and later), the team's projects driving the load, and who else on the team is still over.
+A defer card's evidence adds **who could take it** (each teammate considered and the check that stopped them, e.g. "Tyler: would end 2.7 pts over in Platform Cycle 30"), how much of the person's work is already in progress (never moved), what deferring frees (this period and later), the team's projects driving the load, and who else on the team is still over.
 
 **A team's share of what's left over.** The team drawer opens with one line, e.g. "Rider app is still +12.9 pts over this period after these moves." Each over-capacity person's excess is split across their teams by where their load is, plus any unassigned team work nobody has room for, so a person on three teams isn't counted three times.
 

@@ -66,7 +66,7 @@ describe('reassignments', () => {
     expect(r.evidence.checks.map((c) => [c.label, c.ok])).toEqual([
       ['Same team', true],
       ['Narrows the gap this period', true],
-      ['Narrows the gap in every period the issue reaches', true],
+      ["Within capacity over the issue's cycle", true],
       ['Has room (≤ 90%)', true],
     ]);
     // Moving MED would leave Quinn more over than Pat: not a spread. Sam (no shared project) is never used.
@@ -95,21 +95,49 @@ describe('reassignments', () => {
     expect(deferrals[0].evidence.startedIssueIds).toEqual(['WIP']);
   });
 
-  it('never leaves the recipient over capacity in another period where the donor is not', () => {
-    // UN spreads to Nov 27, half in each period; Quinn is full next period, Pat isn't.
+  it('judges the window the work is spread over as a whole, not period by period', () => {
+    // UN spreads to Nov 27, half in each period. Quinn is full next period but has room
+    // across UN's whole window (12 + 4 of 20 pts), so relieving Pat now wins.
     const { reassignments } = plan(
       workspace([work('P1', 'Pat', 10, 3), work('UN', 'Pat', 4, 4, null, { dueDate: '2026-11-27' }), work('Q1', 'Quinn', 2, 3), work('Q2', 'Quinn', 10, 3, 'r4')]),
     );
-    expect(reassignments).toHaveLength(0);
+    // Next period, Quinn's own overload gets its own move: Q2 goes to Pat, who has room then.
+    expect(reassignments.map((r) => [r.issueId, r.to, r.bucketIndex])).toEqual([
+      ['UN', 'Quinn', 0],
+      ['Q2', 'Pat', 1],
+    ]);
+    expect(reassignments[0].evidence.checks[2].detail).toMatch(/still has [\d.]+ pts of room/);
   });
 
-  it('checks every period the issue reaches (recipient out next week)', () => {
-    const { reassignments } = plan(workspace([work('P1', 'Pat', 12, 3), work('P2', 'Pat', 2, 4), work('Q1', 'Quinn', 5, 3)]), {
+  it('blocks a move that leaves the recipient more over than the donor across the issue’s cycle (recipient out next week)', () => {
+    const { reassignments, deferrals } = plan(workspace([work('P1', 'Pat', 12, 3), work('P2', 'Pat', 2, 4), work('Q1', 'Quinn', 6, 3)]), {
       unit: 'week',
       size: 1,
       ooo: ooo([{ email: 'quinn@x.dev', personId: 'Quinn', start: '2026-11-09', end: '2026-11-13' }]),
     });
     expect(reassignments).toHaveLength(0);
+    const d = deferrals.find((x) => x.personId === 'Pat' && x.bucketIndex === 0)!;
+    expect(d.evidence.blocked).toEqual([expect.objectContaining({ personId: 'Quinn', detail: expect.stringMatching(/pts over in R Cycle 3/) })]);
+    expect(d.evidence.whyIssue).toMatch(/Closest option: Quinn, who would end [\d.]+ pts over in R Cycle 3/);
+  });
+
+  describe('a cycle that straddles two heat map columns', () => {
+    // r3 (Nov 2 – Nov 15) runs past the first 2-week column (Oct 29 – Nov 11). Quinn is over
+    // in the next column because of r4 work, but has all of r3 free.
+    const snap = () =>
+      workspace([work('P1', 'Pat', 10, 2), work('LOW', 'Pat', 4, 4), work('Q2', 'Quinn', 12, 3, 'r4')]);
+    const run = (buckets: ReturnType<typeof periodBuckets>) => {
+      const model = buildModel({ snapshot: snap(), ooo: null, planner: planner(), range: { from: buckets[0].start, to: buckets[buckets.length - 1].end }, today: TODAY, bufferPct: 0 });
+      return planReassignments(model, buckets);
+    };
+    it('still moves the issue: the tail in the next column does not veto it', () => {
+      const r = run(periodBuckets('2026-10-29', 'week', 2, 2)).reassignments;
+      expect(r.map((x) => [x.issueId, x.from, x.to, x.bucketIndex])).toEqual([['LOW', 'Pat', 'Quinn', 0]]);
+    });
+    it('suggests the same move whatever the column size', () => {
+      const r = run(periodBuckets(TODAY, 'week', 1, 4)).reassignments;
+      expect(r.map((x) => [x.issueId, x.to])[0]).toEqual(['LOW', 'Quinn']);
+    });
   });
 
   it('borrows across teams only to people on a team working on the same project', () => {
