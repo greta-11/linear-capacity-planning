@@ -215,7 +215,7 @@ export function CapacityHeatmap() {
               </button>
               {autoExpand && <span className="muted small">Teams are expanded while a person, project or capacity-type filter is active.</span>}
             </div>
-            <div className="table-wrap">
+            <div className="table-wrap hm-scroll">
               <table className="heatmap heatmap-v2" data-testid="heatmap">
                 <thead>
                   <tr>
