@@ -54,7 +54,7 @@ export interface LoadItem {
   kind: LoadKind;
   /** Points falling inside the window (remaining work, or for `done`, work already done). */
   points: number;
-  /** Estimate (or team median when unestimated). */
+  /** Estimate (1 per issue on teams without estimates). */
   fullPoints: number;
   /** Share still to do, from the issue's status (for `done`, the share already done). */
   weight: number;
@@ -191,7 +191,6 @@ export interface CapacityModel {
   projects: Map<string, Project>;
   oooEntries: Map<string, OooEntry>;
   velocity: Map<string, VelocityInfo>;
-  medianEstimate: Map<string, number>;
   velocityMode: VelocityMode;
   pointsOf(issue: Issue): { points: number; unestimated: boolean };
   statusWeight(issue: Issue): number;
@@ -256,13 +255,6 @@ export function cycleName(cycle: Cycle, team?: Team): string {
   return team ? `${team.key} ${base}` : base;
 }
 
-function median(values: number[]): number | null {
-  if (!values.length) return null;
-  const s = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
 export function teamLoadTotal(l: TeamLoad): number {
   return l.planned + l.unplanned + l.unscheduled + l.done;
 }
@@ -310,18 +302,13 @@ export function buildModel(input: CapacityInput): CapacityModel {
     (cyclesByTeam.get(teamId) ?? []).filter(isCompletedCycle).sort((a, b) => b.endDate.localeCompare(a.endDate)).slice(0, settings.lookbackCycles);
   const upcomingCyclesOf = (teamId: string) => (cyclesByTeam.get(teamId) ?? []).filter((c) => !isCompletedCycle(c));
 
-  // Median estimate per team, used for unestimated issues.
-  const medianEstimate = new Map<string, number>();
-  for (const t of snapshot.teams) {
-    const est = snapshot.issues.filter((i) => i.teamId === t.id && i.estimate != null && i.estimate > 0).map((i) => i.estimate as number);
-    medianEstimate.set(t.id, median(est) ?? 2);
-  }
-
+  // Issues without an estimate (on teams that use estimates) are left out of capacity:
+  // no load, no velocity. Data hygiene flags them so they get estimated.
   const pointsOf = (issue: Issue) => {
     const team = teams.get(issue.teamId);
     if (team?.estimationType === 'notUsed') return { points: 1, unestimated: false };
     if (issue.estimate != null) return { points: issue.estimate, unestimated: false };
-    return { points: medianEstimate.get(issue.teamId) ?? 2, unestimated: true };
+    return { points: 0, unestimated: true };
   };
 
   const statusWeight = (issue: Issue) => {
@@ -378,7 +365,7 @@ export function buildModel(input: CapacityInput): CapacityModel {
     for (const c of cycleList) {
       let cp = 0;
       for (const i of issuesByCycle.get(c.id) ?? []) {
-        if (i.assigneeId !== p.id || i.stateType !== 'completed') continue;
+        if (i.assigneeId !== p.id || i.stateType !== 'completed' || pointsOf(i).unestimated) continue;
         const pts = pointsOf(i).points;
         cp += pts;
         count++;
@@ -475,6 +462,7 @@ export function buildModel(input: CapacityInput): CapacityModel {
       days = 1;
     }
     const { points: fullPoints, unestimated } = pointsOf(issue);
+    if (fullPoints <= 0) return; // unestimated: left out of capacity
     const weight = extra.weight ?? statusWeight(issue);
     if (kind === 'done' && fullPoints * weight <= 0) return;
     const s: Spread = { issue, cycle, start, end, days, fullPoints, weight, points: fullPoints * weight, unestimated, kind, overdue: !!extra.overdue, dateSource: extra.dateSource, noWorkDays };
@@ -603,7 +591,6 @@ export function buildModel(input: CapacityInput): CapacityModel {
     projects,
     oooEntries,
     velocity,
-    medianEstimate,
     velocityMode,
     pointsOf,
     statusWeight,

@@ -55,7 +55,7 @@ const plan = (snap: Snapshot, opts: { ooo?: ReturnType<typeof ooo>; unit?: 'week
 
 describe('reassignments', () => {
   it('moves the lowest-priority not-started issue to a teammate, preferring room, within the same team first', () => {
-    const { reassignments, unresolved } = plan(
+    const { reassignments, deferrals } = plan(
       workspace([work('HIGH', 'Pat', 8, 2), work('LOW', 'Pat', 3, 4), work('MED', 'Pat', 3, 3), work('Q1', 'Quinn', 5, 3)]),
     );
     expect(reassignments).toHaveLength(1);
@@ -71,8 +71,11 @@ describe('reassignments', () => {
     ]);
     // Moving MED would leave Quinn more over than Pat: not a spread. Sam (no shared project) is never used.
     expect(reassignments.some((x) => x.to === 'Sam')).toBe(false);
-    expect(unresolved).toEqual([expect.objectContaining({ personId: 'Pat', bucketIndex: 0 })]);
-    expect(unresolved[0].overBy).toBeCloseTo(1);
+    // Pat is still 1 pt over: one defer card for the lowest-priority remaining issue covers it.
+    expect(deferrals).toEqual([expect.objectContaining({ kind: 'defer', personId: 'Pat', issueId: 'MED', bucketIndex: 0, teamId: 'R' })]);
+    expect(Math.round(deferrals[0].before! * 100)).toBe(110);
+    expect(Math.round(deferrals[0].after! * 100)).toBe(80);
+    expect(deferrals[0].stillOverBy).toBe(0);
   });
 
   it('spreads the load even when both people stay over capacity', () => {
@@ -86,9 +89,10 @@ describe('reassignments', () => {
   });
 
   it('never moves work that has started', () => {
-    const { reassignments, unresolved } = plan(workspace([work('WIP', 'Pat', 30, 4, 'r3', { stateType: 'started', stateName: 'In Progress' })]));
+    const { reassignments, deferrals } = plan(workspace([work('WIP', 'Pat', 30, 4, 'r3', { stateType: 'started', stateName: 'In Progress' })]));
     expect(reassignments).toHaveLength(0);
-    expect(unresolved[0].reason).toMatch(/only work already in progress/);
+    expect(deferrals[0]).toMatchObject({ kind: 'replan', personId: 'Pat', issueId: null });
+    expect(deferrals[0].evidence.startedIssueIds).toEqual(['WIP']);
   });
 
   it('never leaves the recipient over capacity in another period where the donor is not', () => {
@@ -121,13 +125,30 @@ describe('reassignments', () => {
     expect(reassignments[0].evidence.checks[0].label).toBe('Works on the same project');
   });
 
-  it('reports remaining team overflow with a scope-or-timeline label, projects and issues', () => {
-    const { overflow } = plan(workspace([work('P1', 'Pat', 14, 4, 'r3', { projectId: 'X' }), work('Q1', 'Quinn', 12, 3)]));
-    const o = overflow.find((x) => x.teamId === 'R' && x.bucketIndex === 0)!;
-    expect(o.teamOverBy).toBeCloseTo(6);
-    expect(o.label).toBe('Team R exceeds capacity by 6 pts in Nov 2 – Nov 15 after reassignment. Requires a scope or timeline decision.');
-    expect(o.projects[0]).toEqual({ projectId: 'X', points: 14 });
-    expect(o.issueIds).toEqual(['P1', 'Q1']);
+  it("reports what's left as defer cards and the team's share of the overload", () => {
+    const { overflow, deferrals } = plan(workspace([work('P1', 'Pat', 14, 4, 'r3', { projectId: 'X' }), work('Q1', 'Quinn', 12, 3)]));
+    expect(overflow.find((x) => x.teamId === 'R' && x.bucketIndex === 0)!.share).toBeCloseTo(6);
+    const pat = deferrals.find((d) => d.personId === 'Pat')!;
+    expect(pat).toMatchObject({ kind: 'defer', issueId: 'P1', stillOverBy: 0 });
+    expect(pat.evidence.projects[0]).toEqual({ projectId: 'X', points: 14 });
+    expect(pat.evidence.othersOver).toEqual(['Quinn']);
+  });
+
+  it('splits a shared person’s overload across their teams instead of counting it on each', () => {
+    // Sam joins team R too: 12 pts on S and 4 on R, 16 over 10 = 6 over, split 4.5 / 1.5.
+    const snap = workspace([
+      issue({ id: 'S1', identifier: 'S1', teamId: 'S', cycleId: 's3', assigneeId: 'Sam', estimate: 12 }),
+      issue({ id: 'S2', identifier: 'S2', teamId: 'R', cycleId: 'r3', assigneeId: 'Sam', estimate: 4, stateType: 'started', stateName: 'In Progress' }),
+      work('Q1', 'Quinn', 10, 3, 'r3', { stateType: 'started', stateName: 'In Progress' }),
+      work('P1', 'Pat', 10, 3, 'r3', { stateType: 'started', stateName: 'In Progress' }),
+    ]);
+    snap.teams[0].memberIds.push('Sam');
+    snap.people.find((p) => p.id === 'Sam')!.teamIds.push('R');
+    const { overflow } = plan(snap);
+    const share = (t: string) => overflow.find((o) => o.teamId === t && o.bucketIndex === 0)?.share ?? 0;
+    // Started work weighs 50%: Sam carries 12 + 2 = 14 → 4 over, 12/14 on S and 2/14 on R.
+    expect(share('S')).toBeCloseTo((4 * 12) / 14);
+    expect(share('R') + share('S')).toBeCloseTo(4);
   });
 });
 
@@ -152,9 +173,13 @@ describe('reassignments on the demo workspace', () => {
     }
   });
 
-  it('lists people it could not help once per period, and labels team overflow', () => {
-    const keys = result.unresolved.map((u) => `${u.personId}|${u.bucketIndex}`);
+  it('suggests at most two defers per person and period, and team shares over 0.5 pt', () => {
+    const keys = result.deferrals.map((d) => `${d.personId}|${d.bucketIndex}|${d.issueId}`);
     expect(new Set(keys).size).toBe(keys.length);
-    expect(result.overflow.some((o) => /Requires a scope or timeline decision\.$/.test(o.label))).toBe(true);
+    const perPerson = new Map<string, number>();
+    for (const d of result.deferrals) perPerson.set(`${d.personId}|${d.bucketIndex}`, (perPerson.get(`${d.personId}|${d.bucketIndex}`) ?? 0) + 1);
+    expect(Math.max(...perPerson.values())).toBeLessThanOrEqual(2);
+    expect(result.overflow.length).toBeGreaterThan(0);
+    expect(result.overflow.every((o) => o.share > 0.5)).toBe(true);
   });
 });

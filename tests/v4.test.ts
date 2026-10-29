@@ -61,7 +61,7 @@ describe('a cycle under way counts in full', () => {
     const busy = build([issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 30, stateType: 'completed', completedAt: '2026-11-05T10:00:00Z' })]);
     expect(busy.personWindow('A', c3.start, c3.end).status).toBe('over');
     const plan = planReassignments(busy, periodBuckets(c3.start, 'week', 2, 2));
-    expect(plan.unresolved.filter((u) => u.personId === 'A')).toEqual([]);
+    expect(plan.deferrals.filter((d) => d.personId === 'A')).toEqual([]);
   });
 });
 
@@ -99,10 +99,10 @@ describe('reassignment evidence on the demo workspace', () => {
   });
 
   it('only leaves someone over who was over already, or took work while spreading the load', () => {
-    for (const o of plan.overflow) {
-      const b = buckets[o.bucketIndex];
+    for (const d of plan.deferrals) {
+      const b = buckets[d.bucketIndex];
       const w = { start: b.start < today ? today : b.start, end: b.end };
-      for (const p of o.peopleOver) {
+      for (const p of [d]) {
         const before = model.personWindow(p.personId, w.start, w.end);
         const wasOver = before.load > before.plannable + 0.05;
         const received = plan.reassignments.some((r) => r.to === p.personId && model.issuePoints(r.issueId, w.start, w.end) > 0);

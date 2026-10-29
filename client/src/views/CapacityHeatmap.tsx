@@ -159,15 +159,14 @@ export function CapacityHeatmap() {
         add(`project:${t}/${project}:${r.bucketIndex}`, one);
       }
     }
-    for (const o of plan.overflow) {
-      add(`team:${o.teamId}:${o.bucketIndex}`, { overflow: true });
-      for (const p of o.peopleOver) add(`person:${p.personId}:${o.bucketIndex}`, { overflow: true });
+    for (const o of plan.overflow) add(`team:${o.teamId}:${o.bucketIndex}`, { overflow: true });
+    for (const d of plan.deferrals) {
+      add(`person:${d.personId}:${d.bucketIndex}`, { overflow: true });
+      add(`team:${d.teamId}:${d.bucketIndex}`, { overflow: true });
+      if (d.issueId) add(`project:${d.teamId}/${model.issues.get(d.issueId)?.projectId ?? NO_PROJECT}:${d.bucketIndex}`, { overflow: true });
     }
     return out;
   }, [plan, model]);
-  const teamOverflowCount = plan.overflow.filter((o) => o.teamOverBy > 0.05).length;
-  const borrowCount = plan.reassignments.filter((r) => r.kind === 'borrow').length;
-  const moveCount = plan.reassignments.length - borrowCount;
   const periodHeaders = (
     <>
       {buckets.map((b) => (
@@ -192,18 +191,7 @@ export function CapacityHeatmap() {
     <TooltipProvider>
       <div className="stack">
         <Toolbar />
-        <p className="small rec-summary" data-testid="rec-summary">
-          <strong>{moveCount}</strong> suggested reassignment{moveCount === 1 ? '' : 's'} · <strong>{borrowCount}</strong> cross-team borrow{borrowCount === 1 ? '' : 's'} ·{' '}
-          <strong>{teamOverflowCount}</strong> team period{teamOverflowCount === 1 ? '' : 's'} over capacity after reassignment (need a scope or timeline decision). Cells marked{' '}
-          <span className="cell-rec">↔</span>, <span className="cell-rec">⇄</span> or <span className="cell-rec cell-rec-flag">⚑</span> have recommendations: click one to see them.
-        </p>
         <IdleNote />
-        <p className="lede">
-          {h.mode === 'people'
-            ? "Utilization is always a person's whole load ÷ their whole plannable capacity; nothing is split across teams. Under a team, the small text says how much of that capacity the team's work takes up."
-            : "Team rows show the team's people as a whole: everything they carry ÷ their plannable capacity. Project cells show the project's points on the team and how loaded the people doing it are overall."}{' '}
-          Click any cell to see what's in it.
-        </p>
         {!groups.length ? (
           <Empty>
             Nothing matches these filters.{' '}
@@ -239,7 +227,7 @@ export function CapacityHeatmap() {
                   <tbody data-testid="everyone">
                     <tr className="hm-section-row">
                       <th className="hm-name" colSpan={buckets.length + 1}>
-                        Everyone <span className="muted small">· all their work, one row per person, most over first</span>
+                        Everyone
                       </th>
                     </tr>
                     {everyone.map(({ person, cells }) => (
@@ -273,7 +261,7 @@ export function CapacityHeatmap() {
                     )}
                     <tr className="hm-section-row">
                       <th className="hm-name" colSpan={buckets.length + 1}>
-                        By team <span className="muted small">· big number: overall utilization · small text: share of their capacity on this team</span>
+                        By team
                       </th>
                     </tr>
                   </tbody>
@@ -789,7 +777,7 @@ function ProjectCell({
       {...tip(content)}
     >
       {special ? special.body : <CellBody main={`${pts(cell.points)} pts · ${pct(cell.utilization)}`} status={cell.status} sub={overText(cell.load, cell.plannable)} />}
-      <RecMark recs={recs && { ...recs, overflow: false }} />
+      <RecMark recs={recs} />
     </td>
   );
 }
@@ -918,7 +906,7 @@ function spreadMath(model: CapacityModel, item: LoadItem, bucket: Bucket) {
     return `${pts(item.fullPoints)} pts${done} over ${m.spreadDays} elapsed working day${m.spreadDays === 1 ? '' : 's'}, ${m.inPeriod} in this period = ${pts(item.points)} pts`;
   }
   const remaining = item.weight < 1 ? ` × ${pct(item.weight)} = ${pts(item.remainingPoints)} remaining` : '';
-  return `${pts(item.fullPoints)} pts${item.unestimated ? ' (unestimated → team median)' : ''}${remaining} over ${m.spreadDays} working day${m.spreadDays === 1 ? '' : 's'}, ${m.inPeriod} in this period = ${pts(item.points)} pts`;
+  return `${pts(item.fullPoints)} pts${remaining} over ${m.spreadDays} working day${m.spreadDays === 1 ? '' : 's'}, ${m.inPeriod} in this period = ${pts(item.points)} pts`;
 }
 
 const PRIORITY_RANK = (p: number) => (p === 0 ? 5 : p);

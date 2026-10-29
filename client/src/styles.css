@@ -1819,3 +1819,10 @@ ul.plain li {
   bottom: auto;
   left: 4px;
 }
+.rec-tag-scope {
+  background: var(--critical-tint);
+  color: var(--critical-ink);
+}
+.rec-note {
+  margin: 0;
+}

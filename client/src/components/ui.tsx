@@ -147,7 +147,7 @@ export function IssueTable({
                 {showProject && <td className="truncate-sm">{issue.projectId ? (model.projects.get(issue.projectId)?.name ?? issue.projectName) : <span className="muted">—</span>}</td>}
                 {showState && <td>{issue.stateName}</td>}
                 {showPriority && <td>{PRIORITY_LABEL[issue.priority] ?? '—'}</td>}
-                <td className="num">{unestimated ? <span className="muted" title="Unestimated: counted at the team median">~{pts(p)}</span> : pts(p)}</td>
+                <td className="num">{unestimated ? <span className="muted" title="No estimate: left out of capacity">—</span> : pts(p)}</td>
                 {points && <td className="num">{points[id] != null ? pts(points[id]) : '—'}</td>}
                 {notes && !notesInline && <td className="small">{notes[id] ?? ''}</td>}
               </tr>

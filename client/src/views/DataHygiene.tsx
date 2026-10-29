@@ -7,7 +7,7 @@ import { usePlanner } from '../context';
 // only lists them and links to each one.
 
 export function DataHygiene() {
-  const { hygiene, model, state } = usePlanner();
+  const { hygiene, model } = usePlanner();
   const [flag, setFlag] = useState<HygieneFlag | 'all'>('all');
   const [teamId, setTeamId] = useState<string>('');
   const issues = useMemo(
@@ -17,24 +17,14 @@ export function DataHygiene() {
 
   return (
     <div className="stack">
-      <p className="lede">
-        The planner can only plan what it can place. These open issues are missing a date, an estimate or a project, which makes capacity numbers incomplete or guessed. Fix them{' '}
-        <strong>directly in Linear</strong>, then press Sync on the Linear card.
-      </p>
       <div className="hygiene-cards">
         {HYGIENE_FLAGS.map((f) => (
           <button key={f} className={`hygiene-card ${flag === f ? 'hygiene-card-active' : ''}`} onClick={() => setFlag(flag === f ? 'all' : f)} aria-pressed={flag === f} data-testid={`hygiene-${f}`}>
             <div className="hygiene-count">{hygiene.counts[f]}</div>
             <div className="hygiene-label">{HYGIENE_INFO[f].label}</div>
-            <div className="small muted">{HYGIENE_INFO[f].why}</div>
-            <div className="small hygiene-fix">Fix in Linear: {HYGIENE_INFO[f].fix}</div>
           </button>
         ))}
       </div>
-      <p className="muted small">
-        Checked {hygiene.checked} open issues {state.mode === 'demo' ? 'in the demo workspace' : `synced from ${state.snapshot!.organizationName}`}: cycle work, open project work, and assigned work outside both.{' '}
-        {hygiene.flagged} have at least one problem.
-      </p>
 
       <section className="card">
         <h2>By team</h2>
