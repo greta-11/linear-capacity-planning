@@ -1269,9 +1269,28 @@ ul.plain li {
 .hm-legend {
   margin-top: 8px;
 }
+/* The heat map scrolls in its own box so the period headers stay in view. */
+.hm-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 160px);
+}
+.heatmap-v2 thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  /* Covers the table's border-spacing so cells don't show between headers. */
+  box-shadow: inset 0 -1px 0 var(--border), 0 0 0 2px var(--surface);
+}
+.heatmap-v2 thead th.hm-name {
+  z-index: 3;
+}
 @media (max-width: 600px) {
   .hm-name {
     min-width: 120px;
+  }
+  .hm-scroll {
+    max-height: 70vh;
   }
   .risk-score {
     grid-template-columns: 70px 50px 24px;
