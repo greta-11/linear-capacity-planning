@@ -4,7 +4,7 @@ A local web app for Linear teams that answers three questions:
 
 1. **Can we trust the data?** **Data hygiene** counts open issues the planner can't use well: no date, no estimate, or no project. A banner on every tab points you to fix them directly in Linear.
 2. **Where are we overcommitted, and why?** A **capacity heat map** of people and projects, grouped by team, over configurable periods. Click any cell to see the capacity math and what makes up the load.
-3. **What can we do about it?** Each heat map cell's drawer has **recommendations**: reassignments that spread the load within a team, cross-team borrows within a project, and the overflow that nothing can fix. Each card says exactly what to change and shows both people's utilization before and after, with its evidence. They're read-only: you make the changes in Linear.
+3. **What can we do about it?** Each heat map cell's drawer has **recommendations**: reassignments that spread the load within a team, cross-team borrows within a project, and work to defer when nobody can take it. Every recommendation is the same short card: what to do, and the utilization before and after for the people it changes, with its evidence one click away. They're read-only: you make the changes in Linear.
 
 Data sources, shown in the strip at the top of the app, each with its own **Sync** button:
 - **Linear**, through the GraphQL API. By default the planner syncs one saved view, [GX capacity planning demo subset](https://linear.app/rideshare-company/view/gx-capacity-planning-demo-subset-30b9a718498a), with its teams, their members, cycles, projects and issue history (see [Which Linear issues are planned](#which-linear-issues-are-planned)).
@@ -134,8 +134,8 @@ Every open issue (triage, backlog, todo, in progress, in review) is checked for 
 | Flag | Meaning | Effect on the planner | Fix in Linear |
 |---|---|---|---|
 | **No date** | Not in a current or upcoming cycle, no due date, and no project target date | Can't be placed in time, so it isn't counted in anyone's capacity | Add it to a cycle, set a due date, or put it in a project with a target date |
-| **No estimate** | The team uses estimates and the issue has none | Counted at the team's median estimate, so its load is a guess | Estimate it |
-| **No project** | Not in a project | Shows as "No project" in the heat map's project view and in remaining overflow | Add it to a project |
+| **No estimate** | The team uses estimates and the issue has none | Left out of capacity (no load, no velocity) until it's estimated | Estimate it |
+| **No project** | Not in a project | Shows as "No project" in the heat map's project view | Add it to a project |
 
 The tab shows a card per flag, a table per team, and the flagged issues with an **Open in Linear ↗** link each. Click a card or a team to filter the list.
 
@@ -150,7 +150,7 @@ While any issue is flagged, a banner under the data strip says how many need cle
   - Week periods step on from there (2-week periods line up with 2-week cycles). Month and quarter periods end on calendar boundaries.
   - The column that contains today is marked **in progress**. It counts the **full period**: past days add to capacity, and work already done in the cycle adds to load (see [How capacity is calculated](#how-capacity-is-calculated)).
 - **Utilization is always aggregate:** a person's whole load ÷ their whole plannable capacity. A person's capacity is never split between their teams.
-- **Cells** show a big number with a small line beneath, tinted by status. A ring marks periods with OOO. Over-capacity cells add the gap in points ("+3.4 pts over"). **↔n** marks *n* suggested same-team reassignments, **⇄n** cross-team borrows, and **⚑** a cell still over capacity after them. A line above the table counts them.
+- **Cells** show a big number with a small line beneath, tinted by status. A ring marks periods with OOO. Over-capacity cells add the gap in points ("+3.4 pts over"). **↔n** marks *n* suggested same-team reassignments, **⇄n** cross-team borrows, and **⚑** a cell still over capacity after them (with defer suggestions).
 - **Individuals | Projects** toggle:
   - **Individuals** has two sections:
     - **Everyone:** one row per person with their overall utilization, most over first.
@@ -186,8 +186,8 @@ While any issue is flagged, a banner under the data strip says how many need cle
     - **How this is calculated** notes using this cell's numbers, e.g. "PLT-12 · 5 pts × 50% (In Progress) = 2.5 remaining"
     - **Recommendations** for this person in this period
     - every issue in the period, sorted by priority, with its status weight and the share of its points that falls in that period
-  - **Team cell:** the members' capacity (baseline − OOO − buffer), what they carry (this team's work and their work on other teams), **recommendations** (the team's reassignments, borrows and remaining overflow), its members (overall % and % on this team) and its issues.
-  - **Project cell:** the project's points and how loaded the people doing it are, **Teams on this project** (each team's project points, how loaded its people are, and its room up to 90%; a team "has room" at or under 90%), **recommendations** for this project's issues, including cross-team borrows (and the team's overflow when this project drives it), who is doing the work, and its issues.
+  - **Team cell:** the members' capacity (baseline − OOO − buffer), what they carry (this team's work and their work on other teams), **recommendations** (the team's reassignments, borrows and defers, with one line for the team's share of what's still over), its members (overall % and % on this team) and its issues.
+  - **Project cell:** the project's points and how loaded the people doing it are, **Teams on this project** (each team's project points, how loaded its people are, and its room up to 90%; a team "has room" at or under 90%), **recommendations** for this project's issues, including cross-team borrows and defers, who is doing the work, and its issues.
   - The **Members**, **Issues**, **Recommendations** and **Who is doing it** sections each have a ▾/▸ toggle to collapse or expand them. The browser remembers your choice.
 
 ### Recommendations (in the cell drawer)
@@ -203,18 +203,31 @@ Recommendations use the heat map's periods, buffer and velocity. They are sugges
 
 Recipients who stay at or under **90%** ("has room") are preferred. Same-team moves come first; if none works, a **cross-team borrow** goes to someone on another team that works on the same project (teams with that project's work in view, plus the project's teams in Linear). Work already in progress or in review is never moved.
 
-Each card says exactly what to do and shows only the two people involved:
+**Defers.** Whoever is still over after every move gets up to two **defer** cards: their lowest-priority not-started issues in the period, stopping once the overage is covered. If only started work is left, the card says to re-plan it instead. These are scope or timeline decisions for the lead; nothing is applied.
+
+**Every recommendation is the same card**: a headline that names the action, a tag, one meta line, before → after for only the people it changes, at most one short note, and the evidence behind **Show evidence**.
 
 ```
+Reassign PLT-250 to Ben Okafor                              Same team
+API v2: pagination for list endpoints · 0.8 pts · Low · Todo
+             Before      After
+  Ana Ruiz   ▲ 214%  →   ▲ 190%
+  Ben Okafor    34%  →      51%
+
 Reassign RIDE-7153 to anthony                    ⇄ Cross-team borrow
-Pet-friendly vehicle filter · 3 pts this period · Low · Todo
+Pet-friendly vehicle filter · 3 pts · Low · Todo
              Before      After
   sarah      ▲ 178%  →   ▲ 141%
   anthony       23%  →      57%
-Needs agreement from both leads (Rider app and Rider Feedback Intake).
+Needs agreement from Rider app and Rider Feedback Intake leads.
+
+Defer RIDE-7160 to a later cycle                 ⚑ Scope or timeline
+Pet carrier size guidance · 2 pts · Low · Todo
+             Before      After
+  Lauren     ▲ 141%  →   ▲ 124%
 ```
 
-When both people are still over afterwards, the card says so: the move spreads the load, and a scope or timeline decision is needed too.
+Notes, at most one per card: the borrow agreement note; "Both still over; a scope or timeline decision is needed too." when a move only spreads the load; "Still +N pts over after this." on a defer that doesn't cover the overage.
 
 **Show evidence** on a card opens what the suggestion was built from:
 - **Trigger:** the donor's load vs plannable capacity, e.g. "Ana in Oct 28 – Nov 1: 7.4 pts remaining load vs 3.4 pts plannable = 218% · over above 100%".
@@ -224,11 +237,9 @@ When both people are still over afterwards, the card says so: the move spreads t
 - **Source rows:** the Linear issue, and both people's OOO CSV rows (file and row number).
 - **Freshness:** when Linear was last synced and when the OOO data was loaded.
 
-People still over capacity afterwards are listed in one line, e.g. "Still over after these moves: Ana +6.2 pts, Chen +3.2 pts. Needs a scope or timeline decision."
+A defer card's evidence adds what deferring frees (this period and later), the team's projects driving the load, and who else on the team is still over.
 
-**Remaining overflow.** After every reassignment is applied, each team and period still over capacity gets a flag (not a recommendation) with the points over plannable capacity, the projects driving the load, and the issues involved:
-- "Platform exceeds capacity by 8 pts in Nov 9 – Nov 22 after reassignment. Requires a scope or timeline decision."
-- "Platform has capacity overall in Nov 9 – Nov 22, but Ana remains over (3 pts) after reassignment. Their remaining work can't be moved within the constraints."
+**A team's share of what's left over.** The team drawer opens with one line, e.g. "Rider app is still +12.9 pts over this period after these moves." Each over-capacity person's excess is split across their teams by where their load is, plus any unassigned team work nobody has room for, so a person on three teams isn't counted three times.
 
 ---
 
@@ -261,7 +272,7 @@ Everything is in **estimate points**. Teams with estimates turned off count each
 - **Cycle work:** an issue's remaining points are spread evenly over the remaining working days of its cycle, and each period picks up the share that falls inside it. An issue that entered its cycle after the cycle's first day is shown as *added mid-cycle* (from Linear issue history; falls back to the creation date).
 - **Done in cycle:** in a cycle under way, the work already done goes on its elapsed working days (cycle start to yesterday): completed issues at their full estimate, plus the done share of started issues (e.g. the other 50% of an In Progress issue). Each issue therefore counts its full estimate across the cycle. Canceled issues don't count.
 - **Unscheduled work:** open issues with no cycle are spread from today to their **due date**, or else their project's **target date**. If that date has passed, they go on the current week. Issues with no date at all aren't load; they're flagged under Data hygiene.
-- Unestimated issues count at the team's median estimate and are flagged.
+- **Unestimated issues are left out** (no load, and they don't count toward velocity) until they're estimated; Data hygiene flags them. Teams with estimates turned off count each issue as 1 point.
 
 <a id="people-with-no-planned-work"></a>**People with no planned work:** an active person with no load anywhere in the periods in view is left out of team capacity, the heat map rows and recommendations (they can't receive reassigned work). Counting them would make teams look emptier than they are. Someone with work in at least one period still counts in every period.
 
@@ -310,7 +321,7 @@ shared/        Pure TypeScript used by server and browser
   calendar.ts         working days, ranges, week/month/quarter periods
   capacity.ts         capacity engine (velocity modes, OOO, buffer, status weights, load spreading, person/team windows)
   hygiene.ts          data hygiene flags (no date, no estimate, no project)
-  reassign.ts         reassignments and remaining overflow
+  reassign.ts         reassignments, borrows, defers and team overflow shares
 server/        Express API (binds to 127.0.0.1 only)
   linear/             GraphQL client (pagination, rate-limit retries), queries, view config (view.ts), normalisation
   ooo/csv.ts          CSV parse/validate/diff/export

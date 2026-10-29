@@ -1,5 +1,5 @@
 import { formatRange, maxDay, type Bucket } from './calendar';
-import { HAS_ROOM, isNotStarted, round1, teamWindow, type CapacityModel } from './capacity';
+import { HAS_ROOM, isNotStarted, teamWindow, type CapacityModel } from './capacity';
 import type { Day } from './types';
 
 // Reassignments and remaining overflow.
@@ -11,7 +11,9 @@ import type { Day } from './types';
 //     period and in every other period (and the cycle or spread window) the work reaches, and
 //   - the gap between them shrinks by at least MIN_GAIN points.
 // Recipients who stay at or under HAS_ROOM (90%) are preferred, but both people may still
-// be over afterwards: spreading the load still helps, and the overflow shows the rest.
+// be over afterwards: spreading the load still helps. Whoever is still over then gets
+// defer suggestions (their lowest-priority not-started work to push to a later cycle), and
+// each team gets its share of what's left over.
 // Same-team moves come first; then cross-team borrows, to people on other teams that work
 // on the same project. A period that started in the past is judged on its remaining days.
 
@@ -61,34 +63,54 @@ export interface ReassignmentEvidence {
   whyRecipient: string;
 }
 
-export interface Unresolved {
+/**
+ * A scope or timeline suggestion for someone still over capacity after every move: defer
+ * one of their lowest-priority not-started issues to a later cycle, or (when only started
+ * work is left) re-plan it. Suggestions only; nothing is applied.
+ */
+export interface Deferral {
+  kind: 'defer' | 'replan';
   personId: string;
+  /** The issue's team for a defer; the team holding most of the person's load for a re-plan. */
   teamId: string;
+  issueId: string | null;
   bucketIndex: number;
-  overBy: number;
-  reason: string;
-  window: { start: string; end: string };
+  /** Points this frees in the period. */
+  periodPoints: number;
+  /** The person's utilization this period before and after (after earlier deferrals). */
+  before: number | null;
+  after: number | null;
+  /** Still over after this deferral, in points (0 when it covers the overage). */
+  stillOverBy: number;
+  evidence: DeferralEvidence;
 }
 
+export interface DeferralEvidence {
+  window: { start: string; end: string };
+  trigger: { load: number; plannable: number };
+  whyIssue: string;
+  /** Points the issue frees in later periods in view, by period label. */
+  later: { label: string; points: number }[];
+  /** The team's projects driving its load this period, and others on the team still over. */
+  projects: { projectId: string | null; points: number }[];
+  othersOver: string[];
+  /** For a re-plan: the started issues that can't be moved. */
+  startedIssueIds: string[];
+}
+
+/** A team's share of the overload left after every move. Shared people aren't counted twice. */
 export interface Overflow {
   teamId: string;
   bucketIndex: number;
-  /** Everything the team's people carry after all moves, plus its unassigned work. */
-  teamLoad: number;
-  teamPlannable: number;
-  /** Points over plannable capacity for the team (≤ 0 when the team has room overall). */
-  teamOverBy: number;
-  peopleOver: { personId: string; overBy: number }[];
-  projects: { projectId: string | null; points: number }[];
-  issueIds: string[];
-  label: string;
+  /** Points over attributed to this team's work. */
+  share: number;
   window: { start: string; end: string };
 }
 
 export interface ReassignmentPlan {
   buckets: Bucket[];
   reassignments: Reassignment[];
-  unresolved: Unresolved[];
+  deferrals: Deferral[];
   overflow: Overflow[];
 }
 
@@ -101,10 +123,6 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
   const today = model.input.today;
   /** The part of a period still ahead: from today when it started in the past. */
   const windowOf = (b: Bucket) => ({ start: maxDay(b.start, today), end: b.end });
-  const label = (b: Bucket) => {
-    const w = windowOf(b);
-    return w.start > b.start ? `${b.label} (remaining days, ${formatRange(w.start, w.end)})` : b.label;
-  };
 
   // Current assignee of each moved issue.
   const moved = new Map<string, string>();
@@ -167,7 +185,7 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
   };
 
   const reassignments: Reassignment[] = [];
-  const unresolved: Unresolved[] = [];
+  const stillOver: { personId: string; bi: number; bucket: { start: Day; end: Day; label: string } }[] = [];
 
   interface Option {
     to: string;
@@ -272,17 +290,13 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
 
     for (const { id: personId } of over) {
       const person = model.people.get(personId)!;
-      let reason: string | null = null;
       for (const kind of ['same-team', 'borrow'] as const) {
         while (loadOf(personId, bucket.start, bucket.end).load > loadOf(personId, bucket.start, bucket.end).plannable + EPS) {
           const candidates = person.teamIds
             .flatMap((t) => model.teamItems(t, bucket.start, bucket.end))
             .filter((i) => i.kind !== 'done' && assigneeOf(i.issueId) === personId && !moved.has(i.issueId) && isNotStarted(model.issues.get(i.issueId)!))
             .sort((x, y) => priorityRank(model.issues.get(y.issueId)!.priority) - priorityRank(model.issues.get(x.issueId)!.priority) || y.points - x.points);
-          if (!candidates.length) {
-            reason = 'only work already in progress remains in this period, which isn’t moved';
-            break;
-          }
+          if (!candidates.length) break;
           let option: Option | null = null;
           for (const item of candidates) {
             const issue = model.issues.get(item.issueId)!;
@@ -295,10 +309,7 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
             option = bestOption(personId, item.issueId, pool, bi, bucket, kind);
             if (option) break;
           }
-          if (!option) {
-            reason = 'no one on their teams or projects could take work without ending up more loaded than them';
-            break;
-          }
+          if (!option) break;
           const issue = model.issues.get(option.issueId)!;
           const before = loadOf(personId, bucket.start, bucket.end);
           const toBefore = util(loadOf(option.to, bucket.start, bucket.end));
@@ -336,68 +347,134 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
         if (loadOf(personId, bucket.start, bucket.end).load <= loadOf(personId, bucket.start, bucket.end).plannable + EPS) break;
       }
       const after = loadOf(personId, bucket.start, bucket.end);
-      if (after.load > after.plannable + EPS) {
-        unresolved.push({
-          personId,
-          teamId: mainTeam(personId, bucket.start, bucket.end),
-          bucketIndex: bi,
-          overBy: after.load - after.plannable,
-          reason: reason ?? 'no one on their teams or projects could take work without ending up more loaded than them',
-          window: { start: bucket.start, end: bucket.end },
-        });
-      }
+      if (after.load > after.plannable + EPS) stillOver.push({ personId, bi, bucket });
     }
   });
 
-  // Remaining overflow after all moves, per team and period: the team's people as a whole.
+  // Defer suggestions for whoever is still over: their lowest-priority not-started work in
+  // the period, at most two issues, stopping once the overage is covered.
+  const MAX_DEFERRALS = 2;
+  const deferrals: Deferral[] = [];
+  for (const { personId, bi, bucket } of stillOver) {
+    const start = loadOf(personId, bucket.start, bucket.end);
+    const items = model
+      .personWindow(personId, bucket.start, bucket.end)
+      .items.filter((i) => i.kind !== 'done' && !moved.has(i.issueId));
+    const startedIds = [...new Set(items.filter((i) => !isNotStarted(model.issues.get(i.issueId)!)).map((i) => i.issueId))];
+    const candidates = items
+      .filter((i) => isNotStarted(model.issues.get(i.issueId)!))
+      .sort((x, y) => priorityRank(model.issues.get(y.issueId)!.priority) - priorityRank(model.issues.get(x.issueId)!.priority) || y.points - x.points);
+    // Moved-in work counts too: the recipient may defer what they were given.
+    for (const [issueId, to] of moved) {
+      if (to !== personId) continue;
+      const pts = model.issuePoints(issueId, bucket.start, bucket.end);
+      if (pts > 0 && !candidates.some((c) => c.issueId === issueId)) {
+        const issue = model.issues.get(issueId)!;
+        candidates.push({ issueId, teamId: issue.teamId, points: pts } as (typeof candidates)[number]);
+      }
+    }
+    const context = (teamId: string) => {
+      const tw = teamWindow(model, teamId, bucket.start, bucket.end);
+      return {
+        projects: Object.entries(tw.byProject)
+          .map(([projectId, v]) => ({ projectId: projectId === 'none' ? null : projectId, points: v.points }))
+          .sort((x, y) => y.points - x.points),
+        othersOver: members(teamId)
+          .filter((id) => id !== personId && stillOver.some((o) => o.personId === id && o.bi === bi))
+          .map(name),
+      };
+    };
+    const trigger = { load: start.load, plannable: start.plannable };
+    const window = { start: bucket.start, end: bucket.end };
+    if (!candidates.length) {
+      const teamId = mainTeam(personId, bucket.start, bucket.end);
+      deferrals.push({
+        kind: 'replan',
+        personId,
+        teamId,
+        issueId: null,
+        bucketIndex: bi,
+        periodPoints: 0,
+        before: util(start),
+        after: util(start),
+        stillOverBy: start.load - start.plannable,
+        evidence: {
+          window,
+          trigger,
+          whyIssue: `Only work already in progress remains for ${name(personId)} in this period, and started work isn't moved. Re-plan it: move a date, cut scope, or get help.`,
+          later: [],
+          ...context(teamId),
+          startedIssueIds: startedIds,
+        },
+      });
+      continue;
+    }
+    let load = start.load;
+    for (const item of candidates.slice(0, MAX_DEFERRALS)) {
+      if (load <= start.plannable + EPS) break;
+      const issue = model.issues.get(item.issueId)!;
+      const pts = model.issuePoints(issue.id, bucket.start, bucket.end) || item.points;
+      const before = { load, plannable: start.plannable };
+      load -= pts;
+      const after = { load, plannable: start.plannable };
+      deferrals.push({
+        kind: 'defer',
+        personId,
+        teamId: issue.teamId,
+        issueId: issue.id,
+        bucketIndex: bi,
+        periodPoints: pts,
+        before: util(before),
+        after: util(after),
+        stillOverBy: Math.max(0, load - start.plannable),
+        evidence: {
+          window,
+          trigger,
+          whyIssue: `${issue.stateName} (not started) and ${PRIORITY[issue.priority] ?? 'No priority'} priority: ${name(personId)}'s lowest-priority not-started work in this period. Nobody on their teams or projects could take it without ending up more loaded.`,
+          later: buckets
+            .map((x, j) => ({ label: x.label, points: j > bi ? model.issuePoints(issue.id, x.start, x.end) : 0 }))
+            .filter((x) => x.points > EPS),
+          ...context(issue.teamId),
+          startedIssueIds: [],
+        },
+      });
+    }
+  }
+
+  // What's left over after all moves, per team and period. Each over-capacity person's
+  // excess is split across their teams by where their load is, so a person on three teams
+  // isn't counted three times; unassigned team work that pushes the team over adds to it.
   const overflow: Overflow[] = [];
   buckets.forEach((b, bi) => {
     const bucket = { ...b, ...windowOf(b) };
     if (bucket.start > bucket.end) return;
+    const shares = new Map<string, number>();
+    const add = (teamId: string, pts: number) => shares.set(teamId, (shares.get(teamId) ?? 0) + pts);
+    for (const p of model.people.values()) {
+      if (!model.inPlan(p.id)) continue;
+      const l = loadOf(p.id, bucket.start, bucket.end);
+      const over = l.load - l.plannable;
+      if (over <= EPS || l.load <= 0) continue;
+      const byTeam = new Map<string, number>();
+      for (const t of model.teams.keys()) {
+        for (const i of model.teamItems(t, bucket.start, bucket.end)) {
+          if (assigneeOf(i.issueId) === p.id) byTeam.set(t, (byTeam.get(t) ?? 0) + i.points);
+        }
+      }
+      const total = [...byTeam.values()].reduce((a, x) => a + x, 0);
+      for (const [t, pts] of byTeam) if (total > 0) add(t, (over * pts) / total);
+    }
     for (const team of model.teams.values()) {
       const tw = teamWindow(model, team.id, bucket.start, bucket.end);
-      const people = members(team.id).map((id) => ({ personId: id, ...loadOf(id, bucket.start, bucket.end) }));
-      const teamLoad = people.reduce((a, p) => a + p.load, 0) + tw.unassigned;
-      const teamPlannable = people.reduce((a, p) => a + p.plannable, 0);
-      const teamOverBy = teamLoad - teamPlannable;
-      const peopleOver = people
-        .map((p) => ({ personId: p.personId, overBy: p.load - p.plannable }))
-        .filter((p) => p.overBy > EPS)
-        .sort((x, y) => y.overBy - x.overBy);
-      if (teamOverBy <= EPS && !peopleOver.length) continue;
-      if (tw.teamLoad <= EPS) continue; // nothing of this team's own to decide on
-      const projects = Object.entries(tw.byProject)
-        .map(([projectId, v]) => ({ projectId: projectId === 'none' ? null : projectId, points: v.points }))
-        .sort((x, y) => y.points - x.points);
-      const overIds = new Set(peopleOver.map((p) => p.personId));
-      const pointsById = new Map<string, number>();
-      for (const i of tw.items) {
-        if (teamOverBy <= EPS && !overIds.has(assigneeOf(i.issueId) ?? '')) continue;
-        if (assigneeOf(i.issueId) && !members(team.id).includes(assigneeOf(i.issueId)!)) continue; // borrowed away
-        pointsById.set(i.issueId, (pointsById.get(i.issueId) ?? 0) + i.points);
+      if (tw.unassigned > EPS) {
+        const people = members(team.id).map((id) => loadOf(id, bucket.start, bucket.end));
+        const room = people.reduce((a, x) => a + Math.max(0, x.plannable - x.load), 0);
+        if (tw.unassigned > room) add(team.id, tw.unassigned - room);
       }
-      const issueIds = [...pointsById.entries()].sort((x, y) => y[1] - x[1]).map(([id]) => id);
-      const names = peopleOver.map((p) => name(p.personId));
-      const text =
-        teamOverBy > EPS
-          ? `${team.name} exceeds capacity by ${round1(teamOverBy)} pts in ${label(b)} after reassignment. Requires a scope or timeline decision.`
-          : `${team.name} has capacity overall in ${label(b)}, but ${names.join(', ')} ${names.length === 1 ? 'remains' : 'remain'} over (${peopleOver
-              .map((p) => `${round1(p.overBy)} pts`)
-              .join(', ')}) after reassignment. Their remaining work can't be moved within the constraints.`;
-      overflow.push({
-        teamId: team.id,
-        bucketIndex: bi,
-        teamLoad,
-        teamPlannable,
-        teamOverBy,
-        peopleOver,
-        projects,
-        issueIds,
-        label: text,
-        window: { start: bucket.start, end: bucket.end },
-      });
+    }
+    for (const [teamId, share] of shares) {
+      if (share > 0.5) overflow.push({ teamId, bucketIndex: bi, share, window: { start: bucket.start, end: bucket.end } });
     }
   });
-
-  return { buckets, reassignments, unresolved, overflow };
+  return { buckets, reassignments, deferrals, overflow };
 }

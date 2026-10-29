@@ -17,7 +17,7 @@ export const HYGIENE_INFO: Record<HygieneFlag, { label: string; short: string; w
   noEstimate: {
     label: 'No estimate',
     short: 'no estimate',
-    why: "Counted at the team's median estimate, so the load it adds is a guess.",
+    why: "Left out of capacity until it's estimated.",
     fix: 'Estimate it.',
   },
   noProject: {

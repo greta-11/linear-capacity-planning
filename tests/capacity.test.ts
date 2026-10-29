@@ -137,10 +137,19 @@ describe('load', () => {
     expect(w.items[0].overdue).toBe(true);
   });
 
-  it('counts unestimated issues at the team median and issues as 1 for teams without estimates', () => {
-    const snap = fixture([issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: null }), issue({ teamId: 'U', cycleId: 'u3', assigneeId: 'B', estimate: null })]);
+  it('leaves unestimated issues out of load and velocity; teams without estimates count 1 per issue', () => {
+    const snap = fixture([
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: null }),
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 2 }),
+      issue({ teamId: 'U', cycleId: 'u3', assigneeId: 'B', estimate: null }),
+      // An unestimated completed issue in A's history doesn't add to velocity.
+      issue({ teamId: 'T', cycleId: 'c2', assigneeId: 'A', estimate: null, stateType: 'completed' }),
+    ]);
     const m = build(snap);
-    expect(m.personWindow('A', '2026-11-02', '2026-11-15').items[0]).toMatchObject({ unestimated: true, fullPoints: 5 });
+    const a = m.personWindow('A', '2026-11-02', '2026-11-15');
+    expect(a.items).toHaveLength(1);
+    expect(a.load).toBeCloseTo(2);
+    expect(m.velocity.get('A')!).toMatchObject({ points: 20, completedIssues: 4 });
     expect(m.personWindow('B', '2026-11-02', '2026-11-15').items[0]).toMatchObject({ unestimated: false, fullPoints: 1 });
   });
 });
