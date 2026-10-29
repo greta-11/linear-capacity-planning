@@ -194,14 +194,14 @@ While any issue is flagged, a banner under the data strip says how many need cle
 
 *What can we change, and what needs a scope or timeline decision?*
 
-Recommendations use the heat map's periods, buffer and velocity. They are suggestions only: make the changes in Linear, then **Sync**. They're worked out once for every period in view, then each drawer shows the ones for its person, team or project. A period that started in the past (the **in progress** column) is judged on its **remaining days**, since work already done can't be moved.
+Recommendations use the heat map's periods, buffer and velocity. They are suggestions only: make the changes in Linear, then **Sync**. They're worked out once for every period in view, then each drawer shows the ones for its person, team or project. Every period is judged **in full**, exactly as its heat map cell shows it: in the **in progress** column, work already done on the elapsed days counts too, so a card's before → after numbers start from the cell's %. Only open, not-started work moves. Someone over only on work already done gets no card (nothing is left to act on), and periods that have ended get no suggestions.
 
 **Reassignments spread the load**, even when everyone ends up over capacity. For each period in order, and each person over plannable capacity (most over first), the planner moves their not-started issues (triage, backlog, todo), lowest priority first, to whoever ends up least loaded. A move is made only if it **narrows the gap** between the two people:
 
 - **this period**, the gap between them shrinks by at least 1 pt, and the recipient ends within capacity or no more over it than the donor, and
 - **across the issue's cycle** (or, with no cycle, the window its work is spread over), the recipient ends within capacity or no more over it than the donor.
 
-**Relieving the current period comes first, judged on the cycle the work belongs to.** The cycle is the unit teams plan and commit in; heat map columns are a viewing choice. So a cycle whose last few days fall into the next column can still be moved to someone with room in that cycle, even if they're busy in the next column with other work, and changing the column size doesn't change what's suggested. Later overload isn't ignored: periods are handled in order, so the next period gets its own moves and defers.
+**Relieving the current period comes first, judged on the whole cycle the work belongs to** (work already done in it included). The cycle is the unit teams plan and commit in; heat map columns are a viewing choice. So a cycle whose last few days fall into the next column can still be moved to someone with room in that cycle, even if they're busy in the next column with other work, and changing the column size doesn't change what's suggested. Later overload isn't ignored: periods are handled in order, so the next period gets its own moves and defers.
 
 Recipients who stay at or under **90%** ("has room") are preferred. Same-team moves come first; if none works, a **cross-team borrow** goes to someone on another team that works on the same project (teams with that project's work in view, plus the project's teams in Linear). Work already in progress or in review is never moved.
 
@@ -247,7 +247,7 @@ A defer card's evidence adds **who could take it** (each teammate considered and
 
 ## How capacity is calculated
 
-Everything is in **estimate points**. Teams with estimates turned off count each issue as 1 point. Periods start at the earliest open issue's cycle, so the first one can start in the past; it counts the **full period** (capacity and load), while recommendations look only at its remaining days.
+Everything is in **estimate points**. Teams with estimates turned off count each issue as 1 point. Periods start at the earliest open issue's cycle, so the first one can start in the past; it counts the **full period** (capacity and load), and so do recommendations.
 
 **Capacity**, per person and period, in this order:
 
