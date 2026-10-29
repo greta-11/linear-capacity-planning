@@ -593,7 +593,7 @@ function RecMark({ recs }: { recs?: CellRecs }) {
   const title = [
     recs.moves ? `${recs.moves} suggested reassignment${recs.moves === 1 ? '' : 's'}` : '',
     recs.borrows ? `${recs.borrows} cross-team borrow${recs.borrows === 1 ? '' : 's'}` : '',
-    recs.overflow ? 'still over after reassignment (on the days left)' : '',
+    recs.overflow ? 'still over after reassignment' : '',
   ]
     .filter(Boolean)
     .join(' · ');

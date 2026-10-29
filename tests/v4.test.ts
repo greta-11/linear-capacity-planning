@@ -56,8 +56,24 @@ describe('a cycle under way counts in full', () => {
     expect(m.issuePoints('PROG', c3.start, c3.end)).toBeCloseTo(2);
   });
 
-  it('judges reassignments on the remaining days only', () => {
-    // 30 pts already done this cycle: over on the full period, but nothing left to move.
+  it('judges a period under way in full, so a card starts from the same % as its cell', () => {
+    const m2 = build([
+      issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 6, stateType: 'completed', completedAt: '2026-11-04T10:00:00Z' }),
+      issue({ id: 'BIG', teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 8 }),
+      issue({ id: 'LOW', teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 2, priority: 4 }),
+      issue({ teamId: 'T', cycleId: 'c4', assigneeId: 'B', estimate: 1 }),
+    ]);
+    const cell = m2.personWindow('A', c3.start, c3.end);
+    expect(cell.utilization).toBeCloseTo(1.6); // 6 done + 10 to do, against 10 plannable
+    const plan = planReassignments(m2, periodBuckets(c3.start, 'week', 2, 2));
+    const first = plan.reassignments[0];
+    expect(m2.issues.get(first.issueId)!.id).toBe('LOW');
+    expect(first.fromBefore).toBeCloseTo(cell.utilization!);
+    expect(first.evidence.window).toEqual(c3);
+  });
+
+  it('makes no suggestion for someone over only on work already done', () => {
+    // 30 pts already done this cycle: over on the full period, but nothing left to act on.
     const busy = build([issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 30, stateType: 'completed', completedAt: '2026-11-05T10:00:00Z' })]);
     expect(busy.personWindow('A', c3.start, c3.end).status).toBe('over');
     const plan = planReassignments(busy, periodBuckets(c3.start, 'week', 2, 2));
@@ -93,7 +109,8 @@ describe('reassignment evidence on the demo workspace', () => {
         "Within capacity over the issue's cycle",
         'Has room (≤ 90%)',
       ]);
-      expect(r.evidence.window.start >= today).toBe(true);
+      // Judged on the whole period, as its heat map cell shows it.
+      expect(r.evidence.window).toEqual({ start: buckets[r.bucketIndex].start, end: buckets[r.bucketIndex].end });
       expect(r.evidence.whyIssue).toMatch(/not started/);
     }
   });
@@ -101,7 +118,7 @@ describe('reassignment evidence on the demo workspace', () => {
   it('only leaves someone over who was over already, or took work while spreading the load', () => {
     for (const d of plan.deferrals) {
       const b = buckets[d.bucketIndex];
-      const w = { start: b.start < today ? today : b.start, end: b.end };
+      const w = { start: b.start, end: b.end };
       for (const p of [d]) {
         const before = model.personWindow(p.personId, w.start, w.end);
         const wasOver = before.load > before.plannable + 0.05;

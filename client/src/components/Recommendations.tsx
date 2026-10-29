@@ -209,7 +209,7 @@ function Trigger({ personId, window, trigger }: { personId: string; window: { st
         <strong>
           <PersonName id={personId} />
         </strong>{' '}
-        in {formatRange(window.start, window.end)}: {pts(trigger.load)} pts remaining load vs {pts(trigger.plannable)} pts plannable ={' '}
+        in {formatRange(window.start, window.end)}: {pts(trigger.load)} pts load vs {pts(trigger.plannable)} pts plannable ={' '}
         {pct(trigger.plannable > 0 ? trigger.load / trigger.plannable : null)} <span className="muted">· over above 100%</span>
       </div>
     </div>
@@ -233,7 +233,7 @@ function Inputs({ ids, window }: { ids: string[]; window: { start: string; end: 
               </dt>
               <dd>
                 {pts(perWeek)} pts/wk ({v.source === 'history' ? `own history, ${v.completedIssues} completed issues` : VELOCITY_SOURCE_LABEL[v.source]}) · {w.workingDays} working days ·{' '}
-                {pts(w.oooDays)} OOO days · {pct(w.buffer)} buffer → {pts(w.plannable)} pts plannable, {pts(w.load)} pts load now
+                {pts(w.oooDays)} OOO days · {pct(w.buffer)} buffer → {pts(w.plannable)} pts plannable, {pts(w.load)} pts load
               </dd>
             </div>
           );

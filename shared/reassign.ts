@@ -1,4 +1,4 @@
-import { formatRange, maxDay, type Bucket } from './calendar';
+import { formatRange, type Bucket } from './calendar';
 import { HAS_ROOM, isNotStarted, round1, teamWindow, type CapacityModel } from './capacity';
 import type { Day } from './types';
 
@@ -18,7 +18,9 @@ import type { Day } from './types';
 // defer suggestions (their lowest-priority not-started work to push to a later cycle), and
 // each team gets its share of what's left over.
 // Same-team moves come first; then cross-team borrows, to people on other teams that work
-// on the same project. A period that started in the past is judged on its remaining days.
+// on the same project. Every period is judged in full, as the heat map shows it: a period
+// under way counts the work already done on its elapsed days too, so a card's numbers match
+// its cell. Only open work moves, and periods that have ended get no suggestions.
 
 const EPS = 0.05;
 const MIN_GAIN = 1;
@@ -57,7 +59,7 @@ export interface ConstraintCheck {
 
 /** Everything a reassignment was decided on, shown behind "Show evidence". */
 export interface ReassignmentEvidence {
-  /** The days judged: the period, from today when it started in the past. */
+  /** The days judged: the whole period, as its heat map cell shows it. */
   window: { start: string; end: string };
   /** The from-person just before this move. */
   trigger: { load: number; plannable: number };
@@ -135,8 +137,6 @@ const pct = (n: number | null) => (n == null ? '—' : `${Math.round(n * 100)}%`
 export function planReassignments(model: CapacityModel, buckets: Bucket[]): ReassignmentPlan {
   const name = (id: string) => model.people.get(id)?.displayName ?? 'Unknown';
   const today = model.input.today;
-  /** The part of a period still ahead: from today when it started in the past. */
-  const windowOf = (b: Bucket) => ({ start: maxDay(b.start, today), end: b.end });
 
   // Current assignee of each moved issue.
   const moved = new Map<string, string>();
@@ -236,8 +236,10 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
     const points = model.issuePoints(issueId, bucket.start, bucket.end);
     const fromNow = loadOf(personId, bucket.start, bucket.end);
     const cycleName = spread.cycle ? model.cycleLabel(spread.cycle.id) : `its spread window (${formatRange(spread.start, spread.end)})`;
-    const cyclePoints = model.issuePoints(issueId, spread.start, spread.end);
-    const fromCycle = loadOf(personId, spread.start, spread.end);
+    // The whole cycle, like the period: work already done in it counts too.
+    const span = spread.cycle ? { start: spread.cycle.startDate, end: spread.cycle.endDate } : { start: spread.start, end: spread.end };
+    const cyclePoints = model.issuePoints(issueId, span.start, span.end);
+    const fromCycle = loadOf(personId, span.start, span.end);
     let best: Option | null = null;
     for (const { id: m, teamId } of pool) {
       if (m === personId) continue;
@@ -264,7 +266,7 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
       }
       // Across the issue's cycle: the recipient ends within capacity or no more over it than
       // the donor. Heat map columns don't matter here.
-      const toCycle = loadOf(m, spread.start, spread.end);
+      const toCycle = loadOf(m, span.start, span.end);
       const toCycleAfter = { load: toCycle.load + cyclePoints, plannable: toCycle.plannable };
       const fromCycleAfter = { load: fromCycle.load - cyclePoints, plannable: fromCycle.plannable };
       if (excess(toCycleAfter) > Math.max(excess(fromCycleAfter), 0) + EPS) {
@@ -309,8 +311,8 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
   };
 
   buckets.forEach((b, bi) => {
-    const bucket = { ...b, ...windowOf(b) };
-    if (bucket.start > bucket.end) return;
+    const bucket = { ...b };
+    if (bucket.end < today) return;
     const over = [...model.people.values()]
       .filter((p) => model.inPlan(p.id) && p.teamIds.length)
       .map((p) => ({ id: p.id, ...loadOf(p.id, bucket.start, bucket.end) }))
@@ -417,6 +419,8 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
     };
     const trigger = { load: start.load, plannable: start.plannable };
     const window = { start: bucket.start, end: bucket.end };
+    // Over only on work already done: nothing left in the period to act on.
+    if (!candidates.length && !started.length) continue;
     if (!candidates.length) {
       const teamId = mainTeam(personId, bucket.start, bucket.end);
       deferrals.push({
@@ -485,8 +489,8 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
   // isn't counted three times; unassigned team work that pushes the team over adds to it.
   const overflow: Overflow[] = [];
   buckets.forEach((b, bi) => {
-    const bucket = { ...b, ...windowOf(b) };
-    if (bucket.start > bucket.end) return;
+    const bucket = { ...b };
+    if (bucket.end < today) return;
     const shares = new Map<string, number>();
     const add = (teamId: string, pts: number) => shares.set(teamId, (shares.get(teamId) ?? 0) + pts);
     for (const p of model.people.values()) {
