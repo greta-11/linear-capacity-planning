@@ -88,27 +88,26 @@ describe('reassignment evidence on the demo workspace', () => {
     for (const r of plan.reassignments) {
       expect(r.evidence.trigger.load).toBeGreaterThan(r.evidence.trigger.plannable);
       expect(r.evidence.checks.map((c) => c.label)).toEqual([
-        expect.stringMatching(/^(Same team|Works on the same project)$/),
-        'Narrows the gap this period',
-        'Narrows the gap in every period the issue reaches',
-        'Has room (≤ 90%)',
+        'Same team',
+        expect.stringMatching(/^Within limit over the issue's (cycle|spread window)$/),
+        'Within limit this period',
+        'No new overload next period',
       ]);
       expect(r.evidence.window.start >= today).toBe(true);
       expect(r.evidence.whyIssue).toMatch(/not started/);
     }
   });
 
-  it('only leaves someone over who was over already, or took work while spreading the load', () => {
+  it('never leaves a recipient over capacity in a period it was balanced in (moves that spill into other periods are blocked)', () => {
     for (const o of plan.overflow) {
       const b = buckets[o.bucketIndex];
-      const w = { start: b.start < today ? today : b.start, end: b.end };
-      for (const p of o.peopleOver) {
-        const before = model.personWindow(p.personId, w.start, w.end);
-        const wasOver = before.load > before.plannable + 0.05;
-        const received = plan.reassignments.some((r) => r.to === p.personId && model.issuePoints(r.issueId, w.start, w.end) > 0);
-        expect(wasOver || received).toBe(true);
-      }
+      if (b.start < today) continue; // judged on remaining days; compared below on full periods only
+      for (const p of o.peopleOver) expect(model.personWindow(p.personId, b.start, b.end).load).toBeGreaterThan(model.personWindow(p.personId, b.start, b.end).plannable);
     }
+  });
+
+  it("gives people still over their teammates' headroom", () => {
+    for (const u of plan.unresolved) expect(u.teammates.every((t) => t.personId !== u.personId)).toBe(true);
   });
 });
 

@@ -42,6 +42,13 @@ export interface VelocityInfo {
   fallbackNote: string | null;
 }
 
+export interface AllocationInfo {
+  shares: Record<string, number>;
+  source: 'single-team' | 'history' | 'planned' | 'even';
+  historyPoints: Record<string, number>;
+  plannedPoints: Record<string, number>;
+}
+
 export type LoadKind = 'planned' | 'unplanned' | 'unscheduled' | 'done';
 
 export interface LoadItem {
@@ -98,63 +105,40 @@ export interface PersonWindow {
 
 export interface TeamMember {
   personId: string;
-  /** The person's work on this team in the window. */
+  share: number;
+  /** Plannable capacity for this team. */
+  capacity: number;
   teamLoad: number;
-  /** teamLoad ÷ the person's whole plannable capacity: their load here, as a slice of their utilization. */
-  teamShare: number | null;
-  /** The person's whole load and plannable capacity (all teams). */
-  load: number;
-  plannable: number;
+  otherTeamLoad: number;
   oooDays: number;
   /** Whole-person utilization across all teams in the window. */
   utilization: number | null;
   status: Status;
 }
 
-/**
- * What a team or project cell can say besides a percentage:
- * - `noWork`: the team (or project) has no work in the window
- * - `allOoo`: there is work, and members, but none of them is available
- * - `noCapacity`: there is work but nobody on the team to do it
- * - `unassigned`: (project cells) the only work here has no assignee yet
- * - `nothing`: no work and nobody to do it
- */
-export type CellState = 'ok' | 'noWork' | 'allOoo' | 'noCapacity' | 'unassigned' | 'nothing';
-
-/**
- * A team in a window, measured on its people as a whole: everything its members carry (on
- * any team) plus the team's unassigned work, against their whole plannable capacity. People
- * on several teams count in full on each; capacity is never split between teams.
- */
 export interface TeamWindow {
   start: Day;
   end: Day;
-  /** Members' whole baseline. */
+  /** Members' whole baseline, before OOO and other teams. */
   fullBaseline: number;
   /** Baseline lost to members' OOO. */
   fullOoo: number;
+  /** Members' available capacity that belongs to other teams. */
+  sharedLost: number;
+  /** Available capacity for this team. */
   available: number;
   bufferPoints: number;
   plannable: number;
   capacity: number;
-  /** The team's own work, by kind (sums to teamLoad). */
   planned: number;
   unplanned: number;
   unscheduled: number;
   done: number;
-  /** Of the team's own work, what has no assignee. */
+  /** Of the load above, what has no assignee. */
   unassigned: number;
-  /** The team's own work in the window. */
-  teamLoad: number;
-  /** teamLoad ÷ plannable. */
-  teamShare: number | null;
-  /** Everything the members carry, on any team, plus the team's unassigned work. */
   load: number;
-  /** load − plannable (over capacity when > 0). */
-  overBy: number;
   utilization: number | null;
   status: Status;
-  state: CellState;
   items: LoadItem[];
   byProject: Record<string, { points: number; issueIds: string[] }>;
   unestimatedIssueIds: string[];
@@ -191,6 +175,7 @@ export interface CapacityModel {
   projects: Map<string, Project>;
   oooEntries: Map<string, OooEntry>;
   velocity: Map<string, VelocityInfo>;
+  allocation: Map<string, AllocationInfo>;
   medianEstimate: Map<string, number>;
   velocityMode: VelocityMode;
   pointsOf(issue: Issue): { points: number; unestimated: boolean };
@@ -367,10 +352,12 @@ export function buildModel(input: CapacityInput): CapacityModel {
 
   // --- Velocity -----------------------------------------------------------
   const velocity = new Map<string, VelocityInfo>();
+  const historyPointsByTeam = new Map<string, Record<string, number>>();
   for (const p of snapshot.people) {
     const lookback = new Map<string, Cycle>();
     for (const t of p.teamIds) for (const c of completedCyclesOf(t)) lookback.set(c.id, c);
     const cycleList = [...lookback.values()];
+    const perTeam: Record<string, number> = {};
     let points = 0;
     let count = 0;
     const issueIds: string[] = [];
@@ -383,10 +370,12 @@ export function buildModel(input: CapacityInput): CapacityModel {
         cp += pts;
         count++;
         issueIds.push(i.id);
+        perTeam[i.teamId] = (perTeam[i.teamId] ?? 0) + pts;
       }
       points += cp;
       cyclePoints.push({ cycleId: c.id, points: cp });
     }
+    historyPointsByTeam.set(p.id, perTeam);
     let window: VelocityInfo['window'] = null;
     let available = 0;
     let oooDays = 0;
@@ -543,6 +532,35 @@ export function buildModel(input: CapacityInput): CapacityModel {
   );
   const inPlan = (personId: string) => !!people.get(personId)?.active && !idlePeople.has(personId);
 
+  // --- Allocation (share of time per team, for people on several teams) ---
+  const allocation = new Map<string, AllocationInfo>();
+  for (const p of snapshot.people) {
+    const historyPoints = historyPointsByTeam.get(p.id) ?? {};
+    const plannedPoints: Record<string, number> = {};
+    for (const s of spreadsByAssignee.get(p.id) ?? []) {
+      const pts = portion(s, from, to);
+      if (pts > 0) plannedPoints[s.issue.teamId] = (plannedPoints[s.issue.teamId] ?? 0) + pts;
+    }
+    const teamIds = p.teamIds;
+    const proportional = (src: Record<string, number>) => {
+      const total = teamIds.reduce((a, t) => a + (src[t] ?? 0), 0);
+      return total > 0 ? Object.fromEntries(teamIds.map((t) => [t, (src[t] ?? 0) / total])) : null;
+    };
+    let info: AllocationInfo;
+    if (teamIds.length <= 1) {
+      info = { shares: teamIds.length ? { [teamIds[0]]: 1 } : {}, source: 'single-team', historyPoints, plannedPoints };
+    } else {
+      const hist = proportional(historyPoints);
+      const plan = hist ? null : proportional(plannedPoints);
+      info = hist
+        ? { shares: hist, source: 'history', historyPoints, plannedPoints }
+        : plan
+          ? { shares: plan, source: 'planned', historyPoints, plannedPoints }
+          : { shares: Object.fromEntries(teamIds.map((t) => [t, 1 / teamIds.length])), source: 'even', historyPoints, plannedPoints };
+    }
+    allocation.set(p.id, info);
+  }
+
   // --- Person window -----------------------------------------------------
   const personWindow = (personId: string, start: Day, end: Day): PersonWindow => {
     const person = people.get(personId)!;
@@ -603,6 +621,7 @@ export function buildModel(input: CapacityInput): CapacityModel {
     projects,
     oooEntries,
     velocity,
+    allocation,
     medianEstimate,
     velocityMode,
     pointsOf,
@@ -630,46 +649,37 @@ export function buildModel(input: CapacityInput): CapacityModel {
 // ---------------------------------------------------------------------------
 // Team view
 
-/** "Has room": at or under this utilization. Used to flag teams and to prefer recipients. */
-export const HAS_ROOM = 0.9;
-
-function cellState(work: number, people: number, available: number, load: number): CellState {
-  if (work <= 0.05) return people && available > 0.0001 ? 'noWork' : 'nothing';
-  if (!people) return 'noCapacity';
-  return available > 0.0001 || load <= 0.05 ? 'ok' : 'allOoo';
-}
-
-/** A team's people as a whole in a window (see TeamWindow). */
+/** A team's open work in a window, against its members' plannable time on that team. */
 export function teamWindow(model: CapacityModel, teamId: string, start: Day, end: Day): TeamWindow {
   const team = model.teams.get(teamId)!;
   const settings = model.input.planner.settings;
   let fullBaseline = 0;
   let fullOoo = 0;
+  let sharedLost = 0;
   let available = 0;
-  let plannable = 0;
-  let peopleLoad = 0;
   const members: TeamMember[] = [];
   for (const pid of team.memberIds) {
     if (!model.inPlan(pid)) continue;
     const w = model.personWindow(pid, start, end);
+    const share = model.allocation.get(pid)!.shares[teamId] ?? 0;
     fullBaseline += w.baseline;
     fullOoo += w.baseline - w.available;
-    available += w.available;
-    plannable += w.plannable;
-    peopleLoad += w.load;
+    sharedLost += w.available * (1 - share);
+    available += w.available * share;
     const teamLoad = w.items.filter((i) => i.teamId === teamId).reduce((a, i) => a + i.points, 0);
     members.push({
       personId: pid,
+      share,
+      capacity: w.plannable * share,
       teamLoad,
-      teamShare: w.plannable > 0.0001 ? teamLoad / w.plannable : null,
-      load: w.load,
-      plannable: w.plannable,
+      otherTeamLoad: w.load - teamLoad,
       oooDays: w.oooDays,
       utilization: w.utilization,
       status: w.status,
     });
   }
-  const bufferPoints = available - plannable;
+  const bufferPoints = available * model.bufferPct;
+  const plannable = available - bufferPoints;
   const items = model.teamItems(teamId, start, end);
   let planned = 0;
   let unplanned = 0;
@@ -688,13 +698,13 @@ export function teamWindow(model: CapacityModel, teamId: string, start: Day, end
     p.points += i.points;
     p.issueIds.push(i.issueId);
   }
-  const teamLoad = planned + unplanned + unscheduled + done;
-  const load = peopleLoad + unassigned;
+  const load = planned + unplanned + unscheduled + done;
   return {
     start,
     end,
     fullBaseline,
     fullOoo,
+    sharedLost,
     available,
     bufferPoints,
     plannable,
@@ -704,60 +714,13 @@ export function teamWindow(model: CapacityModel, teamId: string, start: Day, end
     unscheduled,
     done,
     unassigned,
-    teamLoad,
-    teamShare: plannable > 0.0001 ? teamLoad / plannable : null,
     load,
-    overBy: load - plannable,
     ...classify(load, plannable, settings),
-    state: cellState(teamLoad, members.length, available, load),
     items,
     byProject,
     unestimatedIssueIds: [...new Set(items.filter((i) => i.unestimated).map((i) => i.issueId))],
     issueIds: [...new Set(items.map((i) => i.issueId))],
     members: members.sort((a, b) => (b.utilization ?? Infinity) - (a.utilization ?? Infinity)),
-  };
-}
-
-export interface ProjectCell {
-  /** The project's work on this team in the window. */
-  points: number;
-  issueIds: string[];
-  /** In-plan assignees of that work. */
-  people: string[];
-  /** Everything those people carry, plus the project's unassigned work here. */
-  load: number;
-  plannable: number;
-  overBy: number;
-  utilization: number | null;
-  status: Status;
-  state: CellState;
-}
-
-/** A project's work on one team, measured on the people doing it (their whole load and capacity). */
-export function projectCell(model: CapacityModel, teamId: string, projectKey: string, start: Day, end: Day): ProjectCell {
-  const items = model.teamItems(teamId, start, end).filter((i) => (i.projectId ?? 'none') === projectKey);
-  const points = items.reduce((a, i) => a + i.points, 0);
-  const people = [...new Set(items.map((i) => i.assigneeId).filter((id): id is string => !!id && model.inPlan(id)))];
-  let load = items.filter((i) => !i.assigneeId).reduce((a, i) => a + i.points, 0);
-  let plannable = 0;
-  let available = 0;
-  for (const id of people) {
-    const w = model.personWindow(id, start, end);
-    load += w.load;
-    plannable += w.plannable;
-    available += w.available;
-  }
-  return {
-    points,
-    issueIds: [...new Set(items.map((i) => i.issueId))],
-    people,
-    load,
-    plannable,
-    overBy: load - plannable,
-    ...classify(load, plannable, model.input.planner.settings),
-    // A project with no work here just has none planned, whoever is on the team; work with
-    // nobody on it yet is unassigned rather than short of capacity.
-    state: points <= 0.05 ? 'noWork' : !people.length && items.every((i) => !i.assigneeId) ? 'unassigned' : cellState(points, people.length, available, load),
   };
 }
 

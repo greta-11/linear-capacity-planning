@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { periodBuckets } from '../shared/calendar';
-import { buildModel, classify, DEFAULT_SETTINGS, projectCell, teamWindow } from '../shared/capacity';
+import { buildModel, classify, DEFAULT_SETTINGS, teamWindow } from '../shared/capacity';
 import type { Project, VelocityMode } from '../shared/types';
 import { fixture, issue, ooo, planner, TODAY } from './fixtures';
 
@@ -146,48 +146,16 @@ describe('load', () => {
 });
 
 describe('teams and projects', () => {
-  it('measures a team on its people as a whole: a shared person counts in full on each team, never split', () => {
+  it('splits a shared person by scheduled work and reports their plannable time per team', () => {
     const snap = fixture([issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'B', estimate: 3 }), issue({ teamId: 'U', cycleId: 'u3', assigneeId: 'B' })]);
     const m = build(snap, { bufferPct: 0.1 });
-    const b = m.personWindow('B', '2026-11-02', '2026-11-15');
+    expect(m.allocation.get('B')!).toMatchObject({ source: 'planned', shares: { T: 0.75, U: 0.25 } });
     const t = teamWindow(m, 'T', '2026-11-02', '2026-11-15');
-    const u = teamWindow(m, 'U', '2026-11-02', '2026-11-15');
-    // A has no work in range, so only B counts: B's whole capacity (10 available, 9 plannable) on both teams.
-    for (const w of [t, u]) {
-      expect(w.available).toBeCloseTo(10);
-      expect(w.plannable).toBeCloseTo(9);
-      expect(w.load).toBeCloseTo(4); // everything B carries: 3 on T + 1 on U
-      expect(w.utilization).toBeCloseTo(b.utilization!);
-      expect(w.state).toBe('ok');
-    }
-    expect(t.teamLoad).toBeCloseTo(3);
-    expect(u.teamLoad).toBeCloseTo(1);
-    // B's share on each team adds up to B's overall utilization.
-    const shares = [t, u].map((w) => w.members.find((x) => x.personId === 'B')!.teamShare!);
-    expect(shares[0] + shares[1]).toBeCloseTo(b.utilization!);
-  });
-
-  it('labels team states: no work planned, all OOO, no capacity', () => {
-    const snap = fixture([issue({ teamId: 'T', cycleId: 'c4', assigneeId: 'A', estimate: 2 }), issue({ teamId: 'U', cycleId: 'u3', assigneeId: null })]);
-    const m = build(snap, { ooo: ooo([{ start: '2026-11-16', end: '2026-11-27' }]) });
-    expect(teamWindow(m, 'T', '2026-11-02', '2026-11-15').state).toBe('noWork');
-    expect(teamWindow(m, 'T', '2026-11-16', '2026-11-29').state).toBe('allOoo');
-    // U's only member (B) has no work in range, so nobody counts: unassigned work has no capacity.
-    expect(teamWindow(m, 'U', '2026-11-02', '2026-11-15').state).toBe('noCapacity');
-  });
-
-  it('measures a project cell on the people doing it, overall', () => {
-    const snap = fixture(
-      [issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 4, projectId: 'P' }), issue({ teamId: 'T', cycleId: 'c3', assigneeId: 'A', estimate: 8 })],
-      [project()],
-    );
-    const m = build(snap);
-    const c = projectCell(m, 'T', 'P', '2026-11-02', '2026-11-15');
-    expect(c.points).toBeCloseTo(4);
-    expect(c.people).toEqual(['A']);
-    expect(c.utilization).toBeCloseTo(12 / 10); // A's whole load ÷ A's plannable
-    expect(c.overBy).toBeCloseTo(2);
-    expect(projectCell(m, 'T', 'P', '2026-11-16', '2026-11-29').state).toBe('noWork');
+    // A has no work in range, so only B counts: 10 available × 75% → 7.5, 10% buffer → 6.75 plannable
+    expect(t.available).toBeCloseTo(7.5);
+    expect(t.plannable).toBeCloseTo(6.75);
+    expect(t.sharedLost).toBeCloseTo(2.5);
+    expect(t.load).toBeCloseTo(3);
   });
 
   it('leaves out people with no planned work in the range (0% everywhere): no capacity, no row', () => {

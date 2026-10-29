@@ -54,35 +54,19 @@ const plan = (snap: Snapshot, opts: { ooo?: ReturnType<typeof ooo>; unit?: 'week
 };
 
 describe('reassignments', () => {
-  it('moves the lowest-priority not-started issue to a teammate, preferring room, within the same team first', () => {
+  it('moves the lowest-priority not-started issue to the teammate with headroom, within the same team only', () => {
     const { reassignments, unresolved } = plan(
       workspace([work('HIGH', 'Pat', 8, 2), work('LOW', 'Pat', 3, 4), work('MED', 'Pat', 3, 3), work('Q1', 'Quinn', 5, 3)]),
     );
     expect(reassignments).toHaveLength(1);
     const r = reassignments[0];
-    expect(r).toMatchObject({ kind: 'same-team', issueId: 'LOW', from: 'Pat', to: 'Quinn', teamId: 'R', toTeamId: 'R', bucketIndex: 0, bothStillOver: false });
+    expect(r).toMatchObject({ issueId: 'LOW', from: 'Pat', to: 'Quinn', teamId: 'R', bucketIndex: 0 });
     expect(r.periodPoints).toBeCloseTo(3);
-    expect([r.fromBefore, r.fromAfter, r.toBefore, r.toAfter].map((x) => Math.round(x! * 100))).toEqual([140, 110, 50, 80]);
-    expect(r.evidence.checks.map((c) => [c.label, c.ok])).toEqual([
-      ['Same team', true],
-      ['Narrows the gap this period', true],
-      ['Narrows the gap in every period the issue reaches', true],
-      ['Has room (≤ 90%)', true],
-    ]);
-    // Moving MED would leave Quinn more over than Pat: not a spread. Sam (no shared project) is never used.
+    expect(r.rationale).toBe("Quinn has 5 pts of headroom this period and 10 next; they'd be at 80% this period and 0% next. Pat goes from 140% to 110%.");
+    // Sam (team S) has room but is never used. Pat is still over and is reported, not omitted.
     expect(reassignments.some((x) => x.to === 'Sam')).toBe(false);
-    expect(unresolved).toEqual([expect.objectContaining({ personId: 'Pat', bucketIndex: 0 })]);
+    expect(unresolved).toEqual([expect.objectContaining({ personId: 'Pat', bucketIndex: 0, reason: 'no remaining issue fits within a teammate’s headroom' })]);
     expect(unresolved[0].overBy).toBeCloseTo(1);
-  });
-
-  it('spreads the load even when both people stay over capacity', () => {
-    const { reassignments } = plan(workspace([work('BIG', 'Pat', 16, 2), work('B', 'Pat', 2, 4), work('C', 'Pat', 2, 4), work('Q1', 'Quinn', 11, 3)]));
-    expect(reassignments.map((r) => r.issueId).sort()).toEqual(['B', 'C']);
-    expect(reassignments.every((r) => r.bothStillOver)).toBe(true);
-    const last = reassignments[reassignments.length - 1];
-    expect(Math.round(last.fromAfter! * 100)).toBe(160);
-    expect(Math.round(last.toAfter! * 100)).toBe(150);
-    expect(last.evidence.checks.find((c) => c.label.startsWith('Has room'))!.ok).toBe(false);
   });
 
   it('never moves work that has started', () => {
@@ -91,41 +75,37 @@ describe('reassignments', () => {
     expect(unresolved[0].reason).toMatch(/only work already in progress/);
   });
 
-  it('never leaves the recipient over capacity in another period where the donor is not', () => {
-    // UN spreads to Nov 27, half in each period; Quinn is full next period, Pat isn't.
-    const { reassignments } = plan(
+  it('says explicitly when no teammate has headroom', () => {
+    const { reassignments, unresolved } = plan(workspace([work('P1', 'Pat', 14, 4), work('Q1', 'Quinn', 12, 3)]));
+    expect(reassignments).toHaveLength(0);
+    expect(unresolved.find((u) => u.personId === 'Pat')!.reason).toBe('no Team R teammate has headroom this period');
+  });
+
+  it('rejects a move that would overload the teammate next period', () => {
+    // UN spreads to Nov 27, half in each period; Quinn has room now but is full next period.
+    const { reassignments, unresolved } = plan(
       workspace([work('P1', 'Pat', 10, 3), work('UN', 'Pat', 4, 4, null, { dueDate: '2026-11-27' }), work('Q1', 'Quinn', 2, 3), work('Q2', 'Quinn', 10, 3, 'r4')]),
     );
     expect(reassignments).toHaveLength(0);
+    expect(unresolved[0].reason).toBe('teammates with room this period would go over capacity next period');
   });
 
-  it('checks every period the issue reaches (recipient out next week)', () => {
-    const { reassignments } = plan(workspace([work('P1', 'Pat', 12, 3), work('P2', 'Pat', 2, 4), work('Q1', 'Quinn', 5, 3)]), {
+  it('rejects a move that would overload the teammate within the issue’s cycle', () => {
+    // Weekly periods: Quinn has room in week 1 but is out all of week 2, so the 2-week cycle is full.
+    const { reassignments, unresolved } = plan(workspace([work('P1', 'Pat', 12, 3), work('P2', 'Pat', 2, 4), work('Q1', 'Quinn', 5, 3)]), {
       unit: 'week',
       size: 1,
       ooo: ooo([{ email: 'quinn@x.dev', personId: 'Quinn', start: '2026-11-09', end: '2026-11-13' }]),
     });
     expect(reassignments).toHaveLength(0);
-  });
-
-  it('borrows across teams only to people on a team working on the same project', () => {
-    const snap = workspace([
-      work('P1', 'Pat', 10, 2),
-      work('LOW', 'Pat', 3, 4, 'r3', { projectId: 'X' }),
-      work('Q1', 'Quinn', 9, 3),
-      issue({ id: 'S1', identifier: 'S1', teamId: 'S', cycleId: 's3', assigneeId: 'Sam', estimate: 2, projectId: 'X' }),
-    ]);
-    const { reassignments } = plan(snap);
-    expect(reassignments).toHaveLength(1);
-    expect(reassignments[0]).toMatchObject({ kind: 'borrow', issueId: 'LOW', from: 'Pat', to: 'Sam', teamId: 'R', toTeamId: 'S' });
-    expect(reassignments[0].evidence.checks[0].label).toBe('Works on the same project');
+    expect(unresolved[0].reason).toBe('teammates with room this period would go over capacity within the issue’s cycle');
   });
 
   it('reports remaining team overflow with a scope-or-timeline label, projects and issues', () => {
     const { overflow } = plan(workspace([work('P1', 'Pat', 14, 4, 'r3', { projectId: 'X' }), work('Q1', 'Quinn', 12, 3)]));
     const o = overflow.find((x) => x.teamId === 'R' && x.bucketIndex === 0)!;
     expect(o.teamOverBy).toBeCloseTo(6);
-    expect(o.label).toBe('Team R exceeds capacity by 6 pts in Nov 2 – Nov 15 after reassignment. Requires a scope or timeline decision.');
+    expect(o.label).toBe('Team R exceeds capacity by 6 pts in Oct 26 – Nov 8 after reassignment. Requires a scope or timeline decision.'.replace('Oct 26 – Nov 8', 'Nov 2 – Nov 15'));
     expect(o.projects[0]).toEqual({ projectId: 'X', points: 14 });
     expect(o.issueIds).toEqual(['P1', 'Q1']);
   });
@@ -143,12 +123,10 @@ describe('reassignments on the demo workspace', () => {
     for (const r of result.reassignments) {
       const issue = model.issues.get(r.issueId)!;
       expect(['triage', 'backlog', 'unstarted']).toContain(issue.stateType);
-      if (r.kind === 'same-team') expect(model.teams.get(issue.teamId)!.memberIds).toContain(r.to);
-      else expect(model.teams.get(r.toTeamId)!.memberIds).toContain(r.to);
+      expect(model.teams.get(issue.teamId)!.memberIds).toContain(r.to);
+      expect(r.toAfter!).toBeLessThanOrEqual(1.01);
       expect(r.fromAfter!).toBeLessThan(r.fromBefore!);
-      // Recipients end within capacity, or still over but only spreading the load.
-      expect(r.toAfter! <= 1.01 || r.bothStillOver).toBe(true);
-      expect(r.evidence.checks).toHaveLength(4);
+      expect(r.rationale).toMatch(/has [\d.]+ pts of headroom this period/);
     }
   });
 
