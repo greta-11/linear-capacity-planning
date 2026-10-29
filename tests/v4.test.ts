@@ -90,7 +90,7 @@ describe('reassignment evidence on the demo workspace', () => {
       expect(r.evidence.checks.map((c) => c.label)).toEqual([
         expect.stringMatching(/^(Same team|Works on the same project)$/),
         'Narrows the gap this period',
-        'Narrows the gap in every period the issue reaches',
+        "Within capacity over the issue's cycle",
         'Has room (≤ 90%)',
       ]);
       expect(r.evidence.window.start >= today).toBe(true);

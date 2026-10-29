@@ -1,5 +1,5 @@
 import { formatRange, maxDay, type Bucket } from './calendar';
-import { HAS_ROOM, isNotStarted, teamWindow, type CapacityModel } from './capacity';
+import { HAS_ROOM, isNotStarted, round1, teamWindow, type CapacityModel } from './capacity';
 import type { Day } from './types';
 
 // Reassignments and remaining overflow.
@@ -7,9 +7,12 @@ import type { Day } from './types';
 // Moves spread the load: for each period (in order) and each person over plannable
 // capacity, most over first, their not-started issues (lowest priority first) go to
 // whoever ends up least loaded, as long as the move narrows the gap between the two:
-//   - afterwards the recipient is within capacity, or no more over it than the donor, this
-//     period and in every other period (and the cycle or spread window) the work reaches, and
-//   - the gap between them shrinks by at least MIN_GAIN points.
+//   - this period, the gap between them shrinks by at least MIN_GAIN points, and
+//   - across the issue's cycle (or the window it's spread over), the recipient ends within
+//     capacity or no more over it than the donor.
+// Relieving the current period comes first, judged on the cycle the work belongs to rather
+// than on the heat map's columns (a viewing choice): a cycle's tail spilling into the next
+// column doesn't veto a move the cycle has room for. Later periods get their own moves.
 // Recipients who stay at or under HAS_ROOM (90%) are preferred, but both people may still
 // be over afterwards: spreading the load still helps. Whoever is still over then gets
 // defer suggestions (their lowest-priority not-started work to push to a later cycle), and
@@ -96,6 +99,17 @@ export interface DeferralEvidence {
   othersOver: string[];
   /** For a re-plan: the started issues that can't be moved. */
   startedIssueIds: string[];
+  /** Points of the person's work this period that are already in progress (never moved). */
+  inProgressPoints: number;
+  /** Who was considered for the issue, and the check that stopped each of them. */
+  blocked: Blocker[];
+}
+
+export interface Blocker {
+  personId: string;
+  detail: string;
+  /** How far over the person would end (for picking the main blocker). */
+  overAfter: number;
 }
 
 /** A team's share of the overload left after every move. Shared people aren't counted twice. */
@@ -187,6 +201,15 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
   const reassignments: Reassignment[] = [];
   const stillOver: { personId: string; bi: number; bucket: { start: Day; end: Day; label: string } }[] = [];
 
+  /** Why each person couldn't take an issue in a period, keyed `${bucketIndex}|${issueId}`. */
+  const blockers = new Map<string, Blocker[]>();
+  const block = (bi: number, issueId: string, b: Blocker) => {
+    const key = `${bi}|${issueId}`;
+    const list = blockers.get(key) ?? [];
+    if (!list.some((x) => x.personId === b.personId)) list.push(b);
+    blockers.set(key, list);
+  };
+
   interface Option {
     to: string;
     toTeamId: string;
@@ -212,33 +235,42 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
     const issue = model.issues.get(issueId)!;
     const points = model.issuePoints(issueId, bucket.start, bucket.end);
     const fromNow = loadOf(personId, bucket.start, bucket.end);
-    // Every other window the issue's work reaches: the other periods, and its cycle or spread.
-    const others = [
-      ...buckets
-        .map((x, j) => ({ ...windowOf(x), label: x.label, j }))
-        .filter((x) => x.j !== bi && x.start <= x.end && model.issuePoints(issueId, x.start, x.end) > 0),
-      { start: spread.start, end: spread.end, label: spread.cycle ? model.cycleLabel(spread.cycle.id) : 'its spread window', j: -1 },
-    ];
+    const cycleName = spread.cycle ? model.cycleLabel(spread.cycle.id) : `its spread window (${formatRange(spread.start, spread.end)})`;
+    const cyclePoints = model.issuePoints(issueId, spread.start, spread.end);
+    const fromCycle = loadOf(personId, spread.start, spread.end);
     let best: Option | null = null;
     for (const { id: m, teamId } of pool) {
       if (m === personId) continue;
       const toNow = loadOf(m, bucket.start, bucket.end);
       const fromAfter = { load: fromNow.load - points, plannable: fromNow.plannable };
       const toAfter = { load: toNow.load + points, plannable: toNow.plannable };
-      // Narrow the gap this period, by at least MIN_GAIN: the recipient ends within capacity
-      // or no more over it than the donor.
-      if (excess(toAfter) > Math.max(excess(fromAfter), 0) + EPS) continue;
+      // This period: the recipient ends within capacity or no more over it than the donor,
+      // and the gap between them narrows by at least MIN_GAIN.
+      if (excess(toAfter) > Math.max(excess(fromAfter), 0) + EPS) {
+        block(bi, issueId, {
+          personId: m,
+          overAfter: excess(toAfter),
+          detail:
+            excess(toNow) > EPS
+              ? `already over this period (${pct(util(toNow))})`
+              : `would end ${round1(excess(toAfter))} pts over this period, more than ${name(personId)}`,
+        });
+        continue;
+      }
       const gain = excess(fromNow) - excess(toNow) - Math.abs(excess(fromAfter) - excess(toAfter));
-      if (gain < MIN_GAIN - EPS) continue;
-      // ...and never leave the recipient more over than the donor anywhere else it lands.
-      const spills = others.some((x) => {
-        const add = model.issuePoints(issueId, x.start, x.end);
-        if (add <= 0) return false;
-        const f = loadOf(personId, x.start, x.end);
-        const t = loadOf(m, x.start, x.end);
-        return excess({ load: t.load + add, plannable: t.plannable }) > Math.max(excess({ load: f.load - add, plannable: f.plannable }), 0) + EPS;
-      });
-      if (spills) continue;
+      if (gain < MIN_GAIN - EPS) {
+        block(bi, issueId, { personId: m, overAfter: excess(toAfter), detail: `too little of the issue falls in this period to make a difference (${round1(points)} pts)` });
+        continue;
+      }
+      // Across the issue's cycle: the recipient ends within capacity or no more over it than
+      // the donor. Heat map columns don't matter here.
+      const toCycle = loadOf(m, spread.start, spread.end);
+      const toCycleAfter = { load: toCycle.load + cyclePoints, plannable: toCycle.plannable };
+      const fromCycleAfter = { load: fromCycle.load - cyclePoints, plannable: fromCycle.plannable };
+      if (excess(toCycleAfter) > Math.max(excess(fromCycleAfter), 0) + EPS) {
+        block(bi, issueId, { personId: m, overAfter: excess(toCycleAfter), detail: `would end ${round1(excess(toCycleAfter))} pts over in ${cycleName}` });
+        continue;
+      }
       const toAfterUtil = util(toAfter);
       const room = toAfterUtil != null && toAfterUtil <= HAS_ROOM + 1e-9;
       const better = !best || (room && !best.room) || (room === best.room && (toAfterUtil ?? Infinity) < (best.toAfterUtil ?? Infinity));
@@ -260,14 +292,11 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
             ok: true,
           },
           {
-            label: 'Narrows the gap in every period the issue reaches',
+            label: "Within capacity over the issue's cycle",
             detail:
-              others.length > 1
-                ? `Checked ${others
-                    .filter((x) => x.j >= 0)
-                    .map((x) => x.label)
-                    .join(', ') || 'no other period'} and ${others[others.length - 1].label}: ${name(m)} is never left more over capacity than ${name(personId)}.`
-                : 'The issue has no work in other periods.',
+              excess(toCycleAfter) <= EPS
+                ? `${cycleName}: ${name(m)} still has ${round1(-excess(toCycleAfter))} pts of room after taking it.`
+                : `${cycleName}: ${name(m)} ends ${round1(excess(toCycleAfter))} pts over, no more than ${name(personId)}.`,
             ok: true,
           },
           room
@@ -360,7 +389,9 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
     const items = model
       .personWindow(personId, bucket.start, bucket.end)
       .items.filter((i) => i.kind !== 'done' && !moved.has(i.issueId));
-    const startedIds = [...new Set(items.filter((i) => !isNotStarted(model.issues.get(i.issueId)!)).map((i) => i.issueId))];
+    const started = items.filter((i) => !isNotStarted(model.issues.get(i.issueId)!));
+    const startedIds = [...new Set(started.map((i) => i.issueId))];
+    const inProgressPoints = started.reduce((a, i) => a + i.points, 0);
     const candidates = items
       .filter((i) => isNotStarted(model.issues.get(i.issueId)!))
       .sort((x, y) => priorityRank(model.issues.get(y.issueId)!.priority) - priorityRank(model.issues.get(x.issueId)!.priority) || y.points - x.points);
@@ -405,6 +436,8 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
           later: [],
           ...context(teamId),
           startedIssueIds: startedIds,
+          inProgressPoints,
+          blocked: [],
         },
       });
       continue;
@@ -417,6 +450,8 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
       const before = { load, plannable: start.plannable };
       load -= pts;
       const after = { load, plannable: start.plannable };
+      const blocked = (blockers.get(`${bi}|${issue.id}`) ?? []).slice().sort((x, y) => x.overAfter - y.overAfter);
+      const main = blocked[0];
       deferrals.push({
         kind: 'defer',
         personId,
@@ -430,12 +465,16 @@ export function planReassignments(model: CapacityModel, buckets: Bucket[]): Reas
         evidence: {
           window,
           trigger,
-          whyIssue: `${issue.stateName} (not started) and ${PRIORITY[issue.priority] ?? 'No priority'} priority: ${name(personId)}'s lowest-priority not-started work in this period. Nobody on their teams or projects could take it without ending up more loaded.`,
+          whyIssue: `${issue.stateName} (not started) and ${PRIORITY[issue.priority] ?? 'No priority'} priority: ${name(personId)}'s lowest-priority not-started work in this period. ${
+            main ? `Closest option: ${name(main.personId)}, who ${main.detail}.` : `Nobody else is on ${model.teamName(issue.teamId)} or on a team working on its project.`
+          }`,
           later: buckets
             .map((x, j) => ({ label: x.label, points: j > bi ? model.issuePoints(issue.id, x.start, x.end) : 0 }))
             .filter((x) => x.points > EPS),
           ...context(issue.teamId),
           startedIssueIds: [],
+          inProgressPoints,
+          blocked,
         },
       });
     }
